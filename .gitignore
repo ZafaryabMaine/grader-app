@@ -1,0 +1,18 @@
+# Secrets
+.streamlit/secrets.toml
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# OS/editor clutter
+.DS_Store
+.vscode/
+
+# Optional local data / exports
+*.csv
