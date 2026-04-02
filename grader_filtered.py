@@ -377,20 +377,27 @@ def build_output_csv(full_df: pd.DataFrame, annotations: dict, display_df: pd.Da
         "annotator_note", "strict_success", "partial_success", "failure",
         "annotator_username", "annotation_timestamp",
     ]
-    for col in output_ann_cols:
+    extra_text_cols = ["presented_to_annotator", "completion_status", "auto_decision", "auto_reason"]
+
+    for col in output_ann_cols + extra_text_cols:
         if col not in output.columns:
             output[col] = ""
+        else:
+            output[col] = output[col].astype("object")
+            output[col] = output[col].where(~pd.isna(output[col]), "")
 
     for display_idx, ann in annotations.items():
         try:
             orig_idx = int(display_df.iloc[display_idx]["index"])
         except (KeyError, IndexError, ValueError):
             continue
+
         for col in output_ann_cols:
             if col in ann:
-                output.at[orig_idx, col] = ann[col]
-        output.at[orig_idx, "presented_to_annotator"] = ann.get("presented_to_annotator", "Yes")
-        output.at[orig_idx, "completion_status"] = ann.get("completion_status", "annotated")
+                output.at[orig_idx, col] = "" if ann[col] is None else str(ann[col])
+
+        output.at[orig_idx, "presented_to_annotator"] = str(ann.get("presented_to_annotator", "Yes"))
+        output.at[orig_idx, "completion_status"] = str(ann.get("completion_status", "annotated"))
 
     return output
 
