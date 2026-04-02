@@ -1,25 +1,53 @@
 import difflib
+import hashlib
+import io
 from datetime import datetime, timezone
 
 import gspread
 import pandas as pd
 import streamlit as st
+from googleapiclient.discovery import build as google_api_build
+from googleapiclient.http import MediaIoBaseUpload
 from oauth2client.service_account import ServiceAccountCredentials
 
+try:
+    from v5_metrics_asr_mislead_semantic_ENTITY import (
+        entity_mentions_changed,
+        negation_flipped,
+        numeric_mentions_changed,
+    )
+    _DETECTION_AVAILABLE = True
+    _DETECTION_ERROR = ""
+except ImportError as _det_err:
+    _DETECTION_AVAILABLE = False
+    _DETECTION_ERROR = str(_det_err)
+
 # --- APP CONFIG ---
-st.set_page_config(layout="wide", page_title="Adversarial Diff Grader")
+st.set_page_config(layout="wide", page_title="Adversarial Edit Annotator")
 
 
-# --- HARDCODED USERS (replace manually as needed) ---
+# --- CONSTANTS ---
 USERS = {"alice": "pass1", "bob": "pass2"}
 RESPONSES_TAB = "responses"
-ANNOTATION_INT_FIELDS = [
-    "Readable",
-    "GrammarOK",
-    "MeaningChanged",
-    "UnintendedChange",
-    "GarbageArtifacts",
-]
+
+ANNOTATION_FIELDS = ["intended_edit_achieved", "extra_meaning_changed", "obvious_artifact"]
+
+COLUMN_RENAME_MAP = {
+    "AnchorTranscript": "original_sentence",
+    "AdversarialTranscript": "adversarial_sentence",
+    "Method": "method_name",
+    "UtteranceID": "row_id",
+}
+
+TARGET_TYPE_LABELS = {
+    "number": "Number",
+    "negation": "Negation",
+    "entity": "Entity",
+    "none": "None",
+}
+
+# Normalize old shortcode values if target_type is pre-filled
+TARGET_TYPE_NORMALIZE = {"num": "number", "neg": "negation", "ent": "entity", "none": "none"}
 
 # --- STATE MANAGEMENT ---
 SESSION_DEFAULTS = {
@@ -30,6 +58,9 @@ SESSION_DEFAULTS = {
     "user_sheet_rows": {},
     "loaded_sheet_username": None,
     "csv_signature": None,
+    "data_loaded": False,
+    "full_df": None,
+    "display_df": None,
 }
 for key, value in SESSION_DEFAULTS.items():
     if key not in st.session_state:
@@ -46,12 +77,12 @@ def show_diff(text1, text2):
             result += text2[j1:j2]
         elif tag == "insert":
             result += (
-                f"<span style='background-color: #d4edda; color: #155724; "
+                f"<span style='background-color: #e8f5e9; color: #2e7d32; "
                 f"font-weight: bold;'>{text2[j1:j2]}</span>"
             )
         elif tag == "replace":
             result += (
-                f"<span style='background-color: #fff3cd; color: #856404; "
+                f"<span style='background-color: #fff8e1; color: #f57f17; "
                 f"font-weight: bold;'>{text2[j1:j2]}</span>"
             )
     return result
@@ -150,9 +181,7 @@ def load_user_sheet_rows(username):
             if raw_index in (None, ""):
                 continue
 
-            for field in ANNOTATION_INT_FIELDS:
-                row_dict[field] = to_int_if_possible(row_dict.get(field))
-
+            # No int coercion — new annotation fields are strings
             user_rows[raw_index] = {
                 "sheet_row_num": row_num,
                 "data": row_dict,
@@ -169,13 +198,15 @@ def build_annotation_from_sheet_record(df_row, sheet_record):
     saved_data.pop("timestamp", None)
     return {
         **row_data,
-        "Readable": to_int_if_possible(saved_data.get("Readable")),
-        "GrammarOK": to_int_if_possible(saved_data.get("GrammarOK")),
-        "MeaningChanged": to_int_if_possible(saved_data.get("MeaningChanged")),
-        "ChangeType": saved_data.get("ChangeType", "num"),
-        "UnintendedChange": to_int_if_possible(saved_data.get("UnintendedChange")),
-        "GarbageArtifacts": to_int_if_possible(saved_data.get("GarbageArtifacts")),
-        "Rationale": saved_data.get("Rationale", ""),
+        "intended_edit_achieved": saved_data.get("intended_edit_achieved") or None,
+        "extra_meaning_changed":  saved_data.get("extra_meaning_changed")  or None,
+        "obvious_artifact":       saved_data.get("obvious_artifact")       or None,
+        "annotator_note":         saved_data.get("annotator_note", ""),
+        "strict_success":         saved_data.get("strict_success", ""),
+        "partial_success":        saved_data.get("partial_success", ""),
+        "failure":                saved_data.get("failure", ""),
+        "presented_to_annotator": saved_data.get("presented_to_annotator", "Yes"),
+        "completion_status":      saved_data.get("completion_status", "annotated"),
     }
 
 
@@ -235,6 +266,247 @@ def persist_annotation(username, annotation_record):
         return False
 
 
+# --- NEW HELPERS ---
+
+def detect_target_type(original: str, adversarial: str) -> str:
+    """Detect what type of change occurred. Priority: negation > number > entity > none."""
+    if not _DETECTION_AVAILABLE:
+        return "none"
+    if original == adversarial:
+        return "none"
+    try:
+        neg_changed, _ = negation_flipped(original, adversarial)
+        if neg_changed:
+            return "negation"
+        num_changed, _ = numeric_mentions_changed(original, adversarial)
+        if num_changed:
+            return "number"
+        ent_changed, _ = entity_mentions_changed(original, adversarial)
+        if ent_changed:
+            return "entity"
+    except Exception:
+        pass
+    return "none"
+
+
+def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Rename old column names to standard names. Create row_id if missing. Auto-detect target_type if empty."""
+    df = df.rename(columns=COLUMN_RENAME_MAP)
+
+    if "row_id" not in df.columns:
+        df["row_id"] = df.index.astype(str)
+
+    if "method_name" not in df.columns:
+        df["method_name"] = ""
+        st.warning("Column 'method_name' not found in CSV; defaulting to empty.")
+
+    if "target_type" not in df.columns or df["target_type"].isna().all() or (df["target_type"] == "").all():
+        df["target_type"] = df.apply(
+            lambda r: detect_target_type(
+                str(r.get("original_sentence", "")),
+                str(r.get("adversarial_sentence", "")),
+            ),
+            axis=1,
+        )
+    else:
+        # Normalize old shortcodes (num/neg/ent) to full words
+        df["target_type"] = df["target_type"].apply(
+            lambda v: TARGET_TYPE_NORMALIZE.get(str(v).strip().lower(), str(v).strip().lower())
+        )
+
+    return df
+
+
+def auto_decide_rows(df: pd.DataFrame):
+    """Split into (full_df_with_auto_decisions, display_df_for_annotation)."""
+    full_df = df.copy()
+
+    # Initialize output columns
+    for col in ["auto_decision", "auto_reason", "presented_to_annotator", "completion_status"]:
+        full_df[col] = ""
+
+    mask_identical = full_df["original_sentence"] == full_df["adversarial_sentence"]
+
+    for idx in full_df[mask_identical].index:
+        tt = full_df.at[idx, "target_type"]
+        full_df.at[idx, "presented_to_annotator"] = "No"
+        full_df.at[idx, "completion_status"] = "auto_decided"
+        if tt == "none":
+            full_df.at[idx, "auto_decision"] = "strict_success"
+            full_df.at[idx, "auto_reason"] = "identical_sentence_with_none_target"
+        elif tt in ("number", "negation", "entity"):
+            full_df.at[idx, "auto_decision"] = "failure"
+            full_df.at[idx, "auto_reason"] = "identical_sentence_with_expected_target_edit"
+        else:
+            full_df.at[idx, "auto_decision"] = "failure"
+            full_df.at[idx, "auto_reason"] = "identical_sentence_with_expected_target_edit"
+
+    display_df = full_df[~mask_identical].copy().reset_index()
+    return full_df, display_df
+
+
+def load_source_csv():
+    """Load CSV from secrets config. Returns (full_df, display_df, md5_signature)."""
+    csv_path = st.secrets.get("csv_file_path")
+    csv_url = st.secrets.get("csv_url")
+
+    if not csv_path and not csv_url:
+        st.error("Missing csv_file_path or csv_url in .streamlit/secrets.toml")
+        st.stop()
+
+    try:
+        raw_df = pd.read_csv(csv_path if csv_path else csv_url)
+    except Exception as exc:
+        st.error(f"Failed to load CSV: {exc}")
+        st.stop()
+
+    signature = hashlib.md5(
+        pd.util.hash_pandas_object(raw_df).values.tobytes()
+    ).hexdigest()
+
+    normalized = normalize_columns(raw_df)
+    full_df, display_df = auto_decide_rows(normalized)
+
+    return full_df, display_df, signature
+
+
+def build_output_csv(full_df: pd.DataFrame, annotations: dict, display_df: pd.DataFrame) -> pd.DataFrame:
+    """Merge auto-decided rows and manually annotated rows into the final output DataFrame."""
+    output = full_df.copy()
+
+    output_ann_cols = [
+        "intended_edit_achieved", "extra_meaning_changed", "obvious_artifact",
+        "annotator_note", "strict_success", "partial_success", "failure",
+        "annotator_username", "annotation_timestamp",
+    ]
+    for col in output_ann_cols:
+        if col not in output.columns:
+            output[col] = ""
+
+    for display_idx, ann in annotations.items():
+        try:
+            orig_idx = int(display_df.iloc[display_idx]["index"])
+        except (KeyError, IndexError, ValueError):
+            continue
+        for col in output_ann_cols:
+            if col in ann:
+                output.at[orig_idx, col] = ann[col]
+        output.at[orig_idx, "presented_to_annotator"] = ann.get("presented_to_annotator", "Yes")
+        output.at[orig_idx, "completion_status"] = ann.get("completion_status", "annotated")
+
+    return output
+
+
+def generate_summary_report(output_df: pd.DataFrame, username: str) -> str:
+    """Return a markdown-formatted annotation summary."""
+    total = len(output_df)
+    auto = (output_df["completion_status"] == "auto_decided").sum()
+    manual = (output_df["completion_status"] == "annotated").sum()
+
+    ss = (output_df["strict_success"] == "Yes").sum() + (output_df["auto_decision"] == "strict_success").sum()
+    ps = (output_df["partial_success"] == "Yes").sum()
+    fl = (output_df["failure"] == "Yes").sum() + (output_df["auto_decision"] == "failure").sum()
+
+    ann_rows = output_df[output_df["completion_status"] == "annotated"]
+    iea_yes = (ann_rows["intended_edit_achieved"] == "Yes").sum() if len(ann_rows) else 0
+    emc_yes = (ann_rows["extra_meaning_changed"] == "Yes").sum() if len(ann_rows) else 0
+    oa_yes  = (ann_rows["obvious_artifact"] == "Yes").sum() if len(ann_rows) else 0
+
+    def pct(n, d):
+        return f"{100 * n / d:.1f}%" if d else "N/A"
+
+    lines = [
+        f"# Annotation Summary Report",
+        f"",
+        f"- **Annotator:** {username}",
+        f"- **Generated:** {datetime.now(timezone.utc).isoformat()}",
+        f"",
+        f"## Row Counts",
+        f"- Total source rows: {total}",
+        f"- Auto-decided rows (not shown): {auto}",
+        f"- Manually annotated rows: {manual}",
+        f"",
+        f"## Outcomes (all rows)",
+        f"- strict_success: {ss} ({pct(ss, total)})",
+        f"- partial_success: {ps} ({pct(ps, total)})",
+        f"- failure: {fl} ({pct(fl, total)})",
+        f"",
+        f"## Manual Annotation Rates",
+        f"- intended_edit_achieved = Yes: {iea_yes} / {manual} ({pct(iea_yes, manual)})",
+        f"- extra_meaning_changed = Yes:  {emc_yes} / {manual} ({pct(emc_yes, manual)})",
+        f"- obvious_artifact = Yes:       {oa_yes} / {manual} ({pct(oa_yes, manual)})",
+        f"",
+    ]
+
+    # Breakdown by method_name
+    if "method_name" in output_df.columns:
+        lines += ["## Breakdown by method_name", ""]
+        for method, grp in output_df.groupby("method_name"):
+            g_ss = (grp["strict_success"] == "Yes").sum() + (grp["auto_decision"] == "strict_success").sum()
+            g_fl = (grp["failure"] == "Yes").sum() + (grp["auto_decision"] == "failure").sum()
+            lines.append(f"- **{method}**: {len(grp)} rows | strict_success={g_ss} | failure={g_fl}")
+        lines.append("")
+
+    # Breakdown by target_type
+    if "target_type" in output_df.columns:
+        lines += ["## Breakdown by target_type", ""]
+        for tt, grp in output_df.groupby("target_type"):
+            g_ss = (grp["strict_success"] == "Yes").sum() + (grp["auto_decision"] == "strict_success").sum()
+            g_fl = (grp["failure"] == "Yes").sum() + (grp["auto_decision"] == "failure").sum()
+            lines.append(f"- **{tt}**: {len(grp)} rows | strict_success={g_ss} | failure={g_fl}")
+        lines.append("")
+
+    # 8 Y/N/N combination counts (manual annotations only)
+    if len(ann_rows):
+        lines += ["## Y/N/N Combination Counts (manual annotations)", ""]
+        combos = [
+            ("Y N N", "Yes", "No",  "No",  "clean success"),
+            ("Y Y N", "Yes", "Yes", "No",  "target hit + collateral damage"),
+            ("Y N Y", "Yes", "No",  "Yes", "target hit + obvious artifact"),
+            ("Y Y Y", "Yes", "Yes", "Yes", "target hit + collateral + artifact"),
+            ("N N N", "No",  "No",  "No",  "miss, otherwise clean"),
+            ("N Y N", "No",  "Yes", "No",  "wrong/unintended change"),
+            ("N N Y", "No",  "No",  "Yes", "miss + obvious artifact"),
+            ("N Y Y", "No",  "Yes", "Yes", "wrong change + obvious artifact"),
+        ]
+        for label, iea, emc, oa, desc in combos:
+            count = (
+                (ann_rows["intended_edit_achieved"] == iea) &
+                (ann_rows["extra_meaning_changed"]  == emc) &
+                (ann_rows["obvious_artifact"]       == oa)
+            ).sum()
+            lines.append(f"- **{label}** ({desc}): {count}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def upload_to_drive(filename: str, content, mimetype: str) -> str:
+    """Upload content to the Google Drive folder specified in secrets. Returns webViewLink."""
+    scopes = [
+        "https://spreadsheets.google.com/feeds",
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive",
+    ]
+    credentials = ServiceAccountCredentials.from_json_keyfile_dict(
+        get_sheet_credentials_dict(), scopes
+    )
+    service = google_api_build("drive", "v3", credentials=credentials)
+
+    folder_id = st.secrets.get("google_drive_folder_id")
+    if not folder_id:
+        raise KeyError("Missing google_drive_folder_id in .streamlit/secrets.toml")
+
+    file_metadata = {"name": filename, "parents": [folder_id]}
+    if isinstance(content, str):
+        content = content.encode("utf-8")
+    media = MediaIoBaseUpload(io.BytesIO(content), mimetype=mimetype, resumable=False)
+    result = service.files().create(
+        body=file_metadata, media_body=media, fields="id,webViewLink"
+    ).execute()
+    return result.get("webViewLink", "")
+
+
 def reset_user_session():
     for key in [
         "authenticated",
@@ -244,13 +516,16 @@ def reset_user_session():
         "user_sheet_rows",
         "loaded_sheet_username",
         "csv_signature",
+        "data_loaded",
+        "full_df",
+        "display_df",
     ]:
         st.session_state[key] = SESSION_DEFAULTS[key]
 
 
 def show_login():
-    st.title("🔐 Login")
-    st.caption("Sign in to continue to the grader.")
+    st.title("Login")
+    st.caption("Sign in to continue to the annotator.")
 
     with st.form("login_form"):
         username = st.text_input("Username")
@@ -279,162 +554,251 @@ if st.sidebar.button("Logout"):
     reset_user_session()
     st.rerun()
 
-st.title("🔍 Filtered Adversarial Grader")
-st.caption("Only showing rows where Anchor and Adversarial transcripts differ.")
+st.title("Adversarial Edit Annotator")
+st.caption("Human evaluation of targeted adversarial sentence edits.")
 
-# --- FILE UPLOAD ---
-uploaded_file = st.file_uploader("Upload your CSV file", type="csv")
-
-if uploaded_file:
-    raw_df = pd.read_csv(uploaded_file)
-
-    # FILTER: Only rows where transcripts are different
-    df = raw_df[
-        raw_df["AnchorTranscript"] != raw_df["AdversarialTranscript"]
-    ].copy().reset_index()
-
-    file_signature = (
-        st.session_state.username,
-        uploaded_file.name,
-        uploaded_file.size,
-        len(df),
+# --- DETECTION CHECK ---
+if not _DETECTION_AVAILABLE:
+    st.error(
+        f"Detection module unavailable: {_DETECTION_ERROR}. "
+        "Ensure `src/semantics/` is present and `v5_metrics_asr_mislead_semantic_ENTITY.py` is importable."
     )
+    st.stop()
 
-    if st.session_state.csv_signature != file_signature:
+# --- AUTO-LOAD CSV ---
+if not st.session_state.data_loaded:
+    with st.spinner("Loading dataset..."):
+        full_df, display_df, signature = load_source_csv()
+    new_sig = (st.session_state.username, signature)
+    if st.session_state.csv_signature != new_sig:
         if st.session_state.loaded_sheet_username != st.session_state.username:
             load_user_sheet_rows(st.session_state.username)
-        hydrate_annotations_from_sheet(df)
-        st.session_state.current_idx = first_unannotated_index(len(df)) if len(df) else 0
-        st.session_state.csv_signature = file_signature
+        hydrate_annotations_from_sheet(display_df)
+        st.session_state.current_idx = first_unannotated_index(len(display_df)) if len(display_df) else 0
+        st.session_state.csv_signature = new_sig
+    st.session_state.full_df = full_df
+    st.session_state.display_df = display_df
+    st.session_state.data_loaded = True
 
-    total_rows = len(df)
-    completed_rows = len(st.session_state.annotations)
-    st.sidebar.info(f"{completed_rows} of {total_rows} rows completed")
+full_df = st.session_state.full_df
+display_df = st.session_state.display_df
+total_rows = len(display_df)
+completed_rows = len(st.session_state.annotations)
 
-    if total_rows == 0:
-        st.success("All rows are identical! Nothing to annotate.")
-    else:
-        if st.session_state.current_idx >= total_rows:
-            st.session_state.current_idx = total_rows - 1
+# --- SIDEBAR PROGRESS + INSTRUCTIONS ---
+st.sidebar.info(f"{completed_rows} of {total_rows} rows completed")
 
-        idx = st.session_state.current_idx
+with st.sidebar.expander("Annotation Instructions", expanded=False):
+    st.markdown("""
+**Intended edit achieved?**
+Did the adversarial sentence make the change it was supposed to make?
+- *number* — did the intended number change happen?
+- *negation* — did polarity flip as intended?
+- *entity* — did the intended entity change happen?
+- *none* — was meaning correctly left unchanged?
 
-        # --- NAVIGATION ---
-        col_nav1, col_nav2, col_nav3 = st.columns([1, 2, 1])
-        with col_nav1:
-            if st.button("⬅️ Previous") and idx > 0:
-                st.session_state.current_idx -= 1
-                st.rerun()
-        with col_nav2:
-            st.write(
-                f"**Sample {idx + 1} of {total_rows}** "
-                f"(Filtered from {len(raw_df)} total)"
-            )
-            st.progress((idx + 1) / total_rows)
-        with col_nav3:
-            if st.button("Skip ➡️") and idx < total_rows - 1:
-                st.session_state.current_idx += 1
-                st.rerun()
+**Extra meaning changed?**
+Did anything else in meaning change beyond the intended edit?
 
-        st.divider()
+**Obvious artifact?**
+Is the sentence clearly broken, degenerated, or corrupted?
 
-        # --- DISPLAY AREA ---
-        anchor_txt = str(df.iloc[idx]["AnchorTranscript"])
-        adversarial_txt = str(df.iloc[idx]["AdversarialTranscript"])
+---
 
-        col1, col2 = st.columns(2)
-        with col1:
-            st.subheader("⚓ Anchor")
-            st.info(anchor_txt)
+**What to ignore (unless meaning clearly changes):**
+- Punctuation differences (comma, period, quote)
+- Capitalization differences
+- Spacing differences
+- "ten" vs "10" — treat as equivalent
 
-        with col2:
-            st.subheader("⚡ Adversarial (Diff Highlighted)")
-            diff_html = show_diff(anchor_txt, adversarial_txt)
-            st.markdown(
-                (
-                    "<div style='padding: 10px; border: 1px solid #ccc; "
-                    f"border-radius: 5px;'>{diff_html}</div>"
-                ),
-                unsafe_allow_html=True,
-            )
+**Obvious artifact includes:**
+- Repeated words or phrases
+- Nonsense fragments
+- Corrupted symbols / broken encoding
+- Visibly incomplete or truncated text
+- Degeneration or very noticeable manipulation
+""")
 
-        st.divider()
-
-        # --- ANNOTATION FORM ---
-        existing_data = st.session_state.annotations.get(idx, {})
-
-        with st.form("annotation_form"):
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                readable = st.radio(
-                    "Readable?",
-                    [1, 0],
-                    index=0 if existing_data.get("Readable") == 1 else 1,
-                    horizontal=True,
-                )
-                grammar = st.radio(
-                    "Grammar OK?",
-                    [1, 0],
-                    index=0 if existing_data.get("GrammarOK") == 1 else 1,
-                    horizontal=True,
-                )
-            with c2:
-                meaning_changed = st.radio(
-                    "Meaning Changed?",
-                    [1, 0],
-                    index=0 if existing_data.get("MeaningChanged", 1) == 1 else 1,
-                    horizontal=True,
-                )
-                change_type = st.selectbox(
-                    "Change Type",
-                    ["num", "neg", "ent", "multi", "none"],
-                    index=["num", "neg", "ent", "multi", "none"].index(
-                        existing_data.get("ChangeType", "num")
-                    ),
-                )
-            with c3:
-                unintended = st.radio(
-                    "Unintended?",
-                    [1, 0],
-                    index=0 if existing_data.get("UnintendedChange", 1) == 1 else 1,
-                    horizontal=True,
-                )
-                garbage = st.radio(
-                    "Garbage?",
-                    [0, 1],
-                    index=0 if existing_data.get("GarbageArtifacts") == 0 else 1,
-                    horizontal=True,
+# --- SIDEBAR FINAL SUBMIT ---
+if completed_rows == total_rows and total_rows > 0:
+    st.sidebar.divider()
+    st.sidebar.success("All rows annotated!")
+    if st.sidebar.button("Submit & Export to Drive", type="primary", use_container_width=True):
+        with st.spinner("Building output and uploading to Drive..."):
+            output_df = build_output_csv(full_df, st.session_state.annotations, display_df)
+            report_text = generate_summary_report(output_df, st.session_state.username)
+            csv_bytes = output_df.to_csv(index=False).encode("utf-8")
+            timestamp_str = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+            csv_filename = f"annotations_{st.session_state.username}_{timestamp_str}.csv"
+            report_filename = f"report_{st.session_state.username}_{timestamp_str}.md"
+            try:
+                csv_url = upload_to_drive(csv_filename, csv_bytes, "text/csv")
+                report_url = upload_to_drive(report_filename, report_text, "text/markdown")
+                st.sidebar.success("Uploaded to Drive!")
+                st.sidebar.markdown(f"[Download CSV]({csv_url})  |  [View Report]({report_url})")
+            except Exception as exc:
+                st.sidebar.error(f"Drive upload failed: {exc}")
+                st.sidebar.download_button(
+                    "Download CSV instead",
+                    csv_bytes,
+                    csv_filename,
+                    "text/csv",
+                    use_container_width=True,
                 )
 
-            rationale = st.text_input(
-                "Rationale (Short)", value=existing_data.get("Rationale", "")
-            )
+# --- SIDEBAR INTERIM EXPORT ---
+if st.session_state.annotations:
+    st.sidebar.divider()
+    st.sidebar.header("Export (interim)")
+    interim_df = build_output_csv(full_df, st.session_state.annotations, display_df)
+    st.sidebar.download_button(
+        "Download Partial Results",
+        interim_df.to_csv(index=False),
+        "annotated_partial.csv",
+        "text/csv",
+        use_container_width=True,
+    )
 
-            if st.form_submit_button("✅ Save & Next", use_container_width=True):
-                annotation_record = {
-                    **df.iloc[idx].to_dict(),
-                    "Readable": readable,
-                    "GrammarOK": grammar,
-                    "MeaningChanged": meaning_changed,
-                    "ChangeType": "none" if meaning_changed == 0 else change_type,
-                    "UnintendedChange": unintended,
-                    "GarbageArtifacts": garbage,
-                    "Rationale": rationale,
-                }
-                st.session_state.annotations[idx] = annotation_record
-                persist_annotation(st.session_state.username, annotation_record)
+# --- EMPTY STATE ---
+if total_rows == 0:
+    st.success(
+        f"All {len(full_df)} rows have identical original and adversarial sentences — "
+        "nothing to manually annotate."
+    )
+    st.stop()
 
-                if idx < total_rows - 1:
-                    st.session_state.current_idx += 1
-                st.rerun()
+# --- BOUNDS CHECK ---
+if st.session_state.current_idx >= total_rows:
+    st.session_state.current_idx = total_rows - 1
 
-    # --- SIDEBAR DOWNLOAD ---
-    if st.session_state.annotations:
-        st.sidebar.header("Export")
-        final_df = pd.DataFrame(list(st.session_state.annotations.values()))
-        st.sidebar.download_button(
-            "📥 Download Results",
-            final_df.to_csv(index=False),
-            "annotated_diffs.csv",
-            "text/csv",
+idx = st.session_state.current_idx
+row = display_df.iloc[idx]
+
+# --- NAVIGATION ---
+col_nav1, col_nav2 = st.columns([1, 3])
+with col_nav1:
+    if st.button("Previous") and idx > 0:
+        st.session_state.current_idx -= 1
+        st.rerun()
+with col_nav2:
+    auto_count = len(full_df) - total_rows
+    st.write(
+        f"**Sample {idx + 1} of {total_rows}** "
+        f"(from {len(full_df)} total rows; {auto_count} auto-decided)"
+    )
+    st.progress((idx + 1) / total_rows)
+
+st.divider()
+
+# --- ROW METADATA ---
+meta1, meta2, meta3, meta4 = st.columns(4)
+with meta1:
+    st.metric("Row ID", str(row.get("row_id", "—")))
+with meta2:
+    st.metric("Method", str(row.get("method_name", "—")))
+with meta3:
+    target_raw = str(row.get("target_type", ""))
+    st.metric("Expected Target", TARGET_TYPE_LABELS.get(target_raw, target_raw or "—"))
+with meta4:
+    surface = row.get("target_surface_in_original", "")
+    if surface and str(surface) not in ("", "nan"):
+        st.metric("Target Surface", str(surface))
+
+st.divider()
+
+# --- DIFF DISPLAY ---
+original_txt = str(row["original_sentence"])
+adversarial_txt = str(row["adversarial_sentence"])
+
+col1, col2 = st.columns(2)
+with col1:
+    st.subheader("Original")
+    st.info(original_txt)
+with col2:
+    st.subheader("Adversarial (changes highlighted)")
+    diff_html = show_diff(original_txt, adversarial_txt)
+    st.markdown(
+        f"<div style='padding: 10px; border: 1px solid #ccc; border-radius: 5px;'>{diff_html}</div>",
+        unsafe_allow_html=True,
+    )
+
+st.divider()
+
+# --- ANNOTATION FORM ---
+existing_data = st.session_state.annotations.get(idx, {})
+
+def _radio_index(field):
+    val = existing_data.get(field)
+    if val == "Yes":
+        return 0
+    if val == "No":
+        return 1
+    return None  # Streamlit >= 1.26: no pre-selection forces annotator to choose
+
+with st.form("annotation_form"):
+    q1, q2, q3 = st.columns(3)
+    with q1:
+        intended = st.radio(
+            "Intended edit achieved?",
+            ["Yes", "No"],
+            index=_radio_index("intended_edit_achieved"),
+            horizontal=True,
         )
+    with q2:
+        extra_meaning = st.radio(
+            "Extra meaning changed?",
+            ["Yes", "No"],
+            index=_radio_index("extra_meaning_changed"),
+            horizontal=True,
+        )
+    with q3:
+        artifact = st.radio(
+            "Obvious artifact?",
+            ["Yes", "No"],
+            index=_radio_index("obvious_artifact"),
+            horizontal=True,
+        )
+
+    annotator_note = st.text_input(
+        "Annotator note (optional)",
+        value=existing_data.get("annotator_note", ""),
+    )
+
+    submitted = st.form_submit_button("Save & Next", use_container_width=True)
+
+    if submitted:
+        unanswered = [
+            name for name, val in [
+                ("Intended edit achieved", intended),
+                ("Extra meaning changed", extra_meaning),
+                ("Obvious artifact", artifact),
+            ]
+            if val is None
+        ]
+        if unanswered:
+            st.error(f"Please answer all required questions: {', '.join(unanswered)}")
+        else:
+            strict = (intended == "Yes" and extra_meaning == "No" and artifact == "No")
+            partial = (intended == "Yes" and not strict)
+            failure_flag = (intended == "No")
+
+            annotation_record = {
+                **row.to_dict(),
+                "intended_edit_achieved": intended,
+                "extra_meaning_changed": extra_meaning,
+                "obvious_artifact": artifact,
+                "annotator_note": annotator_note,
+                "strict_success": "Yes" if strict else "No",
+                "partial_success": "Yes" if partial else "No",
+                "failure": "Yes" if failure_flag else "No",
+                "presented_to_annotator": "Yes",
+                "completion_status": "annotated",
+                "annotator_username": st.session_state.username,
+                "annotation_timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            st.session_state.annotations[idx] = annotation_record
+            persist_annotation(st.session_state.username, annotation_record)
+
+            if idx < total_rows - 1:
+                st.session_state.current_idx += 1
+            st.rerun()
