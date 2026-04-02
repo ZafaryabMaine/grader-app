@@ -95,7 +95,8 @@ def load_user_supabase_rows(username):
         client = get_supabase_client()
         result = client.table("annotations").select("*").eq("username", username).execute()
     except Exception as exc:
-        st.warning(f"Supabase unavailable. Progress sync disabled: {exc}")
+        st.error("Supabase connection failed — see details below:")
+        st.exception(exc)
         st.session_state.user_db_rows = {}
         st.session_state.loaded_db_username = username
         return
@@ -520,13 +521,18 @@ st.caption("Human evaluation of targeted adversarial sentence edits.")
 
 # --- AUTO-LOAD CSV ---
 if not st.session_state.data_loaded:
-    with st.spinner("Loading dataset..."):
-        full_df, display_df, signature = load_source_csv()
-    new_sig = (st.session_state.username, signature)
-    if st.session_state.csv_signature != new_sig:
-        if st.session_state.loaded_db_username != st.session_state.username:
-            load_user_supabase_rows(st.session_state.username)
-        hydrate_annotations_from_supabase(display_df)
+    try:
+        with st.spinner("Loading dataset..."):
+            full_df, display_df, signature = load_source_csv()
+        new_sig = (st.session_state.username, signature)
+        if st.session_state.csv_signature != new_sig:
+            if st.session_state.loaded_db_username != st.session_state.username:
+                load_user_supabase_rows(st.session_state.username)
+            hydrate_annotations_from_supabase(display_df)
+    except Exception as _load_exc:
+        st.error("Error during data loading — see details below:")
+        st.exception(_load_exc)
+        st.stop()
         st.session_state.current_idx = first_unannotated_index(len(display_df)) if len(display_df) else 0
         st.session_state.csv_signature = new_sig
     st.session_state.full_df = full_df
