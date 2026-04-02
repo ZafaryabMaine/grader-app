@@ -113,13 +113,11 @@ def load_user_supabase_rows(username):
 
 
 def build_annotation_from_db_record(df_row, db_record):
-    row_data = df_row.to_dict()
     saved = dict(db_record)
-    saved.pop("username", None)
-    saved.pop("timestamp", None)
-    saved.pop("id", None)
+    # Only store clean Python types — do NOT spread df_row.to_dict() which contains numpy types.
     return {
-        **row_data,
+        "index": to_int_if_possible(saved.get("index")) or to_int_if_possible(df_row.get("index")),
+        "row_id": str(saved.get("row_id") or df_row.get("row_id", "")),
         "intended_edit_achieved": saved.get("intended_edit_achieved") or None,
         "extra_meaning_changed":  saved.get("extra_meaning_changed")  or None,
         "obvious_artifact":       saved.get("obvious_artifact")       or None,
@@ -722,8 +720,11 @@ with st.form("annotation_form"):
             partial = (intended == "Yes" and not strict)
             failure_flag = (intended == "No")
 
+            # Only store clean Python types in session state — no numpy/pandas types.
+            # row.to_dict() is intentionally excluded to avoid serialisation crashes.
             annotation_record = {
-                **row.to_dict(),
+                "index": int(row["index"]) if "index" in row.index else idx,
+                "row_id": str(row.get("row_id", "")),
                 "intended_edit_achieved": intended,
                 "extra_meaning_changed": extra_meaning,
                 "obvious_artifact": artifact,
