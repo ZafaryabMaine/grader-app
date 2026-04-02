@@ -89,6 +89,68 @@ def get_supabase_client():
     return create_client(url, key)
 
 
+# --- AUTH HELPERS ---
+
+def hash_password(plain_password: str) -> str:
+    return bcrypt.hashpw(
+        plain_password.encode("utf-8"),
+        bcrypt.gensalt(),
+    ).decode("utf-8")
+
+
+def verify_password(plain_password: str, password_hash: str) -> bool:
+    try:
+        return bcrypt.checkpw(
+            plain_password.encode("utf-8"),
+            password_hash.encode("utf-8"),
+        )
+    except Exception:
+        return False
+
+
+def get_user_by_username(username: str):
+    try:
+        client = get_supabase_client()
+        result = (
+            client.table("app_users")
+            .select("*")
+            .ilike("username", username)
+            .limit(1)
+            .execute()
+        )
+        if not result.data:
+            return None
+        return result.data[0]
+    except Exception as exc:
+        st.error("Failed to query user table.")
+        st.exception(exc)
+        return None
+
+
+def create_app_user(username: str, plain_password: str, is_active: bool = True):
+    client = get_supabase_client()
+    row = {
+        "username": username.strip(),
+        "password_hash": hash_password(plain_password),
+        "is_active": is_active,
+    }
+    return client.table("app_users").insert(row).execute()
+
+
+def seed_users(user_list):
+    """Bulk-create users. user_list = [(username, plain_password), ...]"""
+    client = get_supabase_client()
+    rows = [
+        {
+            "username": u.strip(),
+            "password_hash": hash_password(p),
+            "is_active": True,
+        }
+        for u, p in user_list
+    ]
+    return client.table("app_users").upsert(rows, on_conflict="username").execute()
+
+
 def load_user_supabase_rows(username):
     try:
         client = get_supabase_client()
@@ -499,14 +561,31 @@ def show_login():
         submitted = st.form_submit_button("Login", use_container_width=True)
 
         if submitted:
-            if USERS.get(username) == password:
-                reset_user_session()
-                st.session_state.authenticated = True
-                st.session_state.username = username
-                load_user_supabase_rows(username)
-                st.rerun()
-            else:
+            username_clean = (username or "").strip()
+
+            if not username_clean or not password:
+                st.error("Enter both username and password.")
+                return
+
+            user_row = get_user_by_username(username_clean)
+
+            if not user_row:
                 st.error("Invalid username or password.")
+                return
+
+            if not user_row.get("is_active", True):
+                st.error("This account is disabled.")
+                return
+
+            if not verify_password(password, user_row.get("password_hash", "")):
+                st.error("Invalid username or password.")
+                return
+
+            reset_user_session()
+            st.session_state.authenticated = True
+            st.session_state.username = user_row["username"]
+            load_user_supabase_rows(user_row["username"])
+            st.rerun()
 
 
 # --- AUTH GATE ---
@@ -519,6 +598,18 @@ st.sidebar.success(f"Logged in as: {st.session_state.username}")
 if st.sidebar.button("Logout"):
     reset_user_session()
     st.rerun()
+
+# --- TEMPORARY: SEED USERS (remove after first run) ---
+# Uncomment the block below, run the app once to create your users, then comment it out again.
+# with st.sidebar.expander("Admin: Seed Users", expanded=False):
+#     if st.button("Create users now"):
+#         users_to_add = [
+#             ("alice", "pass_alice_2026"),
+#             ("bob",   "pass_bob_2026"),
+#             # add up to 20 users here...
+#         ]
+#         result = seed_users(users_to_add)
+#         st.success(f"Done: {result}")
 
 st.title("Adversarial Edit Annotator")
 st.caption("Human evaluation of targeted adversarial sentence edits.")
