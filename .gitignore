@@ -14,5 +14,6 @@ env/
 .DS_Store
 .vscode/
 
-# Optional local data / exports
-*.csv
+# Optional local data / exports (exclude input data from ignore)
+data/output_*.csv
+annotated_*.csv
