@@ -599,17 +599,17 @@ if st.sidebar.button("Logout"):
     reset_user_session()
     st.rerun()
 
-# --- TEMPORARY: SEED USERS (remove after first run) ---
-# Uncomment the block below, run the app once to create your users, then comment it out again.
-# with st.sidebar.expander("Admin: Seed Users", expanded=False):
-#     if st.button("Create users now"):
-#         users_to_add = [
-#             ("alice", "pass_alice_2026"),
-#             ("bob",   "pass_bob_2026"),
-#             # add up to 20 users here...
-#         ]
-#         result = seed_users(users_to_add)
-#         st.success(f"Done: {result}")
+--- TEMPORARY: SEED USERS (remove after first run) ---
+Uncomment the block below, run the app once to create your users, then comment it out again.
+with st.sidebar.expander("Admin: Seed Users", expanded=False):
+    if st.button("Create users now"):
+        users_to_add = [
+            ("alice", "pass123"),
+            ("bob",   "pass_bob_2026"),
+            # add up to 20 users here...
+        ]
+        result = seed_users(users_to_add)
+        st.success(f"Done: {result}")
 
 st.title("Adversarial Edit Annotator")
 st.caption("Human evaluation of targeted adversarial sentence edits.")
