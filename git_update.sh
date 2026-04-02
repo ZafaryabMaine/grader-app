@@ -1,8 +1,14 @@
+#!/usr/bin/env bash
+set -e
 
-read -p "Enter commit message (leave empty for default): " user_msg
-if [ -z "$user_msg" ]; then
-  user_msg="update"
-fi
+user_msg="${*:-default}"
+
 git add .
+
+if git diff --cached --quiet; then
+  echo "No staged changes to commit."
+  exit 0
+fi
+
 git commit -m "$user_msg"
 git push
