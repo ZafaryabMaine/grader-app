@@ -10,17 +10,8 @@ from googleapiclient.discovery import build as google_api_build
 from googleapiclient.http import MediaIoBaseUpload
 from oauth2client.service_account import ServiceAccountCredentials
 
-try:
-    from v5_metrics_asr_mislead_semantic_ENTITY import (
-        entity_mentions_changed,
-        negation_flipped,
-        numeric_mentions_changed,
-    )
-    _DETECTION_AVAILABLE = True
-    _DETECTION_ERROR = ""
-except ImportError as _det_err:
-    _DETECTION_AVAILABLE = False
-    _DETECTION_ERROR = str(_det_err)
+import re
+from collections import Counter
 
 # --- APP CONFIG ---
 st.set_page_config(layout="wide", page_title="Adversarial Edit Annotator")
@@ -268,21 +259,95 @@ def persist_annotation(username, annotation_record):
 
 # --- NEW HELPERS ---
 
+# --- SELF-CONTAINED DETECTION ---
+
+_NEG_WORDS = frozenset([
+    "no", "not", "never", "neither", "nor", "nobody", "nothing", "nowhere",
+    "without", "hardly", "barely", "scarcely", "cannot",
+])
+_NEG_CONTRACTION_RX = re.compile(r"\bn't\b", re.IGNORECASE)
+
+_NUM_RX = re.compile(
+    r"\b(\d[\d,]*(?:\.\d+)?|\d+/\d+)\b"
+    r"|\b(zero|one|two|three|four|five|six|seven|eight|nine|ten"
+    r"|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen"
+    r"|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy"
+    r"|eighty|ninety|hundred|thousand|million|billion"
+    r"|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\b",
+    re.IGNORECASE,
+)
+
+_PERSON_FIRST = frozenset([
+    "john","mary","james","robert","michael","william","david","richard","joseph","thomas",
+    "charles","christopher","daniel","matthew","anthony","mark","donald","steven","paul",
+    "andrew","emma","olivia","ava","sophia","isabella","mia","amelia","harper","evelyn",
+    "abigail","avery","dylan","elena","camden","lucia","marisol","priya","sofia",
+])
+_PERSON_LAST = frozenset([
+    "smith","johnson","williams","brown","jones","garcia","miller","davis","rodriguez",
+    "martinez","hernandez","lopez","gonzalez","wilson","anderson","taylor","moore",
+    "jackson","martin","lee","perez","thompson","white","harris","sanchez","clark",
+    "ramirez","lewis","robinson","chen","park","kwon","vega","nair","torres",
+])
+_DRUGS = frozenset([
+    "acetaminophen","paracetamol","ibuprofen","naproxen","aspirin","metformin","insulin",
+    "lisinopril","losartan","amlodipine","metoprolol","atorvastatin","simvastatin",
+    "omeprazole","amoxicillin","azithromycin","doxycycline","prednisone","albuterol",
+    "warfarin","heparin","sertraline","fluoxetine","gabapentin","morphine","oxycodone",
+    "levothyroxine","ondansetron",
+])
+_PLACES = frozenset([
+    "california","texas","florida","new york","washington","massachusetts","illinois",
+    "united states","usa","canada","mexico","united kingdom","uk","france","germany",
+    "spain","italy","china","japan","india","australia","new york city","los angeles",
+    "san francisco","boston","chicago","seattle","miami","houston","dallas","atlanta",
+    "atlas insurance","crescent theater","eastport pharmacy","harborview labs",
+    "harborview studios","helix robotics","keystone airport","lakeside inn",
+    "mapleton clinic","northlake university","nova medical","orion books","redwood city",
+    "riverdale hospital","silver pine","summit media","zeta telecom",
+])
+_ENTITY_POOL = _DRUGS | _PLACES
+_TITLE_RX = re.compile(r"\b(dr|mr|ms|mrs|prof)\.?\s+([a-z][a-z'\-]{2,})\b", re.IGNORECASE)
+
+
+def _neg_keys(text: str):
+    t = text.lower()
+    keys = [w for w in re.findall(r"\b\w+\b", t) if w in _NEG_WORDS]
+    keys += _NEG_CONTRACTION_RX.findall(t)
+    return Counter(keys)
+
+
+def _num_mentions(text: str):
+    return Counter(m.group(0).lower() for m in _NUM_RX.finditer(text))
+
+
+def _entity_mentions(text: str):
+    t = text.lower()
+    found = []
+    for phrase in _ENTITY_POOL:
+        if re.search(rf"\b{re.escape(phrase)}\b", t):
+            found.append(phrase)
+    words = re.findall(r"\b[a-z][a-z'\-]{2,}\b", t)
+    for i, w in enumerate(words):
+        if w in _PERSON_FIRST:
+            found.append(w)
+        if w in _PERSON_LAST:
+            found.append(w)
+    for m in _TITLE_RX.finditer(text):
+        found.append(m.group(2).lower())
+    return Counter(found)
+
+
 def detect_target_type(original: str, adversarial: str) -> str:
     """Detect what type of change occurred. Priority: negation > number > entity > none."""
-    if not _DETECTION_AVAILABLE:
-        return "none"
     if original == adversarial:
         return "none"
     try:
-        neg_changed, _ = negation_flipped(original, adversarial)
-        if neg_changed:
+        if _neg_keys(original) != _neg_keys(adversarial):
             return "negation"
-        num_changed, _ = numeric_mentions_changed(original, adversarial)
-        if num_changed:
+        if _num_mentions(original) != _num_mentions(adversarial):
             return "number"
-        ent_changed, _ = entity_mentions_changed(original, adversarial)
-        if ent_changed:
+        if _entity_mentions(original) != _entity_mentions(adversarial):
             return "entity"
     except Exception:
         pass
@@ -556,14 +621,6 @@ if st.sidebar.button("Logout"):
 
 st.title("Adversarial Edit Annotator")
 st.caption("Human evaluation of targeted adversarial sentence edits.")
-
-# --- DETECTION CHECK ---
-if not _DETECTION_AVAILABLE:
-    st.error(
-        f"Detection module unavailable: {_DETECTION_ERROR}. "
-        "Ensure `src/semantics/` is present and `v5_metrics_asr_mislead_semantic_ENTITY.py` is importable."
-    )
-    st.stop()
 
 # --- AUTO-LOAD CSV ---
 if not st.session_state.data_loaded:
