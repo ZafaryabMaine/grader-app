@@ -9,6 +9,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 # --- APP CONFIG ---
 st.set_page_config(layout="wide", page_title="Adversarial Diff Grader")
 
+
 # --- HARDCODED USERS (replace manually as needed) ---
 USERS = {"alice": "pass1", "bob": "pass2"}
 RESPONSES_TAB = "responses"
