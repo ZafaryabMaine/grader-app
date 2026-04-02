@@ -588,18 +588,18 @@ def show_login():
             st.rerun()
 
 
-# --- TEMPORARY: SEED USERS (above auth gate so it runs while logged out) ---
-# After creating users: remove this block and redeploy.
-with st.sidebar.expander("Admin: Seed Users", expanded=False):
-    if st.button("Create users now"):
-        users_to_add = [
-            ("alice", "pass123"),
-            ("bob",   "pass_bob_2026"),
-            # add up to 20 users here...
-        ]
-        result = seed_users(users_to_add)
-        st.success("Users created.")
-        st.write(result)
+# # --- TEMPORARY: SEED USERS (above auth gate so it runs while logged out) ---
+# # After creating users: remove this block and redeploy.
+# with st.sidebar.expander("Admin: Seed Users", expanded=False):
+#     if st.button("Create users now"):
+#         users_to_add = [
+#             ("alice", "pass123"),
+#             ("bob",   "pass_bob_2026"),
+#             # add up to 20 users here...
+#         ]
+#         result = seed_users(users_to_add)
+#         st.success("Users created.")
+#         st.write(result)
 
 # --- AUTH GATE ---
 if not st.session_state.authenticated:
