@@ -4,7 +4,6 @@ import re
 from collections import Counter
 from datetime import datetime, timezone
 
-import bcrypt
 import pandas as pd
 import streamlit as st
 from supabase import create_client
@@ -14,6 +13,8 @@ st.set_page_config(layout="wide", page_title="Adversarial Edit Annotator")
 
 
 # --- CONSTANTS ---
+USERS = {"alice": "pass1", "bob": "pass2"}
+
 ANNOTATION_FIELDS = ["intended_edit_achieved", "extra_meaning_changed", "obvious_artifact"]
 
 COLUMN_RENAME_MAP = {
