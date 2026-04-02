@@ -600,7 +600,7 @@ if st.sidebar.button("Logout"):
     st.rerun()
 
 # --- TEMPORARY: SEED USERS (remove after first run) ---
-Uncomment the block below, run the app once to create your users, then comment it out again.
+# Uncomment the block below, run the app once to create your users, then comment it out again.
 with st.sidebar.expander("Admin: Seed Users", expanded=False):
     if st.button("Create users now"):
         users_to_add = [
