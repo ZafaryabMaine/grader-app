@@ -730,9 +730,13 @@ with col_nav2:
 
 st.divider()
 
-# --- ROW METADATA (anonymous) ---
-target_raw = str(row.get("target_type", ""))
-st.metric("Expected Target", TARGET_TYPE_LABELS.get(target_raw, target_raw or "—"))
+# --- ROW METADATA (anonymous — method and surface intentionally hidden) ---
+meta1, meta2 = st.columns(2)
+with meta1:
+    st.metric("Row ID", str(row.get("row_id", "—")))
+with meta2:
+    target_raw = str(row.get("target_type", ""))
+    st.metric("Expected Target", TARGET_TYPE_LABELS.get(target_raw, target_raw or "—"))
 
 st.divider()
 
