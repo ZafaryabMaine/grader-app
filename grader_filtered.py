@@ -154,20 +154,34 @@ def persist_annotation(username, annotation_record):
     raw_index = to_int_if_possible(annotation_record.get("index"))
     timestamp = datetime.now(timezone.utc).isoformat()
 
+    def _s(v):
+        """Convert any value to a plain Python string, safe for JSON serialisation."""
+        if v is None:
+            return ""
+        try:
+            import numpy as np
+            if isinstance(v, (np.integer,)):
+                return int(v)
+            if isinstance(v, (np.floating,)):
+                return float(v)
+        except ImportError:
+            pass
+        return str(v) if not isinstance(v, (int, float, bool)) else v
+
     row_payload = {
         "username": username,
         "timestamp": timestamp,
-        "index": raw_index,
-        "row_id": str(annotation_record.get("row_id", "")),
-        "intended_edit_achieved": annotation_record.get("intended_edit_achieved", ""),
-        "extra_meaning_changed":  annotation_record.get("extra_meaning_changed", ""),
-        "obvious_artifact":       annotation_record.get("obvious_artifact", ""),
-        "annotator_note":         annotation_record.get("annotator_note", ""),
-        "strict_success":         annotation_record.get("strict_success", ""),
-        "partial_success":        annotation_record.get("partial_success", ""),
-        "failure":                annotation_record.get("failure", ""),
-        "presented_to_annotator": annotation_record.get("presented_to_annotator", "Yes"),
-        "completion_status":      annotation_record.get("completion_status", "annotated"),
+        "index": int(raw_index) if raw_index is not None else None,
+        "row_id": _s(annotation_record.get("row_id", "")),
+        "intended_edit_achieved": _s(annotation_record.get("intended_edit_achieved", "")),
+        "extra_meaning_changed":  _s(annotation_record.get("extra_meaning_changed", "")),
+        "obvious_artifact":       _s(annotation_record.get("obvious_artifact", "")),
+        "annotator_note":         _s(annotation_record.get("annotator_note", "")),
+        "strict_success":         _s(annotation_record.get("strict_success", "")),
+        "partial_success":        _s(annotation_record.get("partial_success", "")),
+        "failure":                _s(annotation_record.get("failure", "")),
+        "presented_to_annotator": _s(annotation_record.get("presented_to_annotator", "Yes")),
+        "completion_status":      _s(annotation_record.get("completion_status", "annotated")),
     }
 
     try:
@@ -614,19 +628,13 @@ with col_nav2:
 
 st.divider()
 
-# --- ROW METADATA ---
-meta1, meta2, meta3, meta4 = st.columns(4)
+# --- ROW METADATA (anonymous — method and surface intentionally hidden) ---
+meta1, meta2 = st.columns(2)
 with meta1:
     st.metric("Row ID", str(row.get("row_id", "—")))
 with meta2:
-    st.metric("Method", str(row.get("method_name", "—")))
-with meta3:
     target_raw = str(row.get("target_type", ""))
     st.metric("Expected Target", TARGET_TYPE_LABELS.get(target_raw, target_raw or "—"))
-with meta4:
-    surface = row.get("target_surface_in_original", "")
-    if surface and str(surface) not in ("", "nan"):
-        st.metric("Target Surface", str(surface))
 
 st.divider()
 

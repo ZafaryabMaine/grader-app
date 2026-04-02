@@ -17,3 +17,5 @@ env/
 # Optional local data / exports (exclude input data from ignore)
 data/output_*.csv
 annotated_*.csv
+
+.streamlit/secrets.toml
