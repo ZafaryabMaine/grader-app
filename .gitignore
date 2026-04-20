@@ -19,3 +19,6 @@ data/output_*.csv
 annotated_*.csv
 
 .streamlit/secrets.toml
+
+docs/
+*.sql

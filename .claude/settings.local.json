@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(wc:*)",
+      "Bash(awk -F',' 'NR>1 {print NF}' data/input.csv)",
+      "Bash(awk -F',' 'NR>1 && NF==16 {print $16}' data/input.csv)",
+      "Bash(awk -F',' '{print $3}' data/input.csv)",
+      "Bash(awk -F',' '$3==\"wspS\"' data/input.csv)",
+      "Bash(awk -F',' '$3==\"wspL\" {print $5,$6}' data/input.csv)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('grader_filtered_v4.py'\\).read\\(\\)\\); print\\('OK: syntax valid'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('grader_filtered.py'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('grader_filtered.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")"
+    ]
+  }
+}
