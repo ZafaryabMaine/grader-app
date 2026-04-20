@@ -220,7 +220,7 @@ def _compute_verdicts(q1, q2, q3, q4, q5):
 # ============================================================
 
 def _render_diff(baseline: str, adversarial: str) -> str:
-    """Character-level diff with inline HTML styling."""
+    """Character-level diff with theme-safe inline styling."""
     parts = []
     for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(
         None, baseline, adversarial
@@ -229,18 +229,19 @@ def _render_diff(baseline: str, adversarial: str) -> str:
             parts.append(adversarial[j1:j2])
         elif tag == "insert":
             parts.append(
-                f"<span style='background:#c8e6c9;font-weight:600'>"
-                f"{adversarial[j1:j2]}</span>"
+                f"<span style='background:rgba(76,175,80,0.25);font-weight:600;"
+                f"border-radius:2px;padding:0 1px'>{adversarial[j1:j2]}</span>"
             )
         elif tag == "replace":
             parts.append(
-                f"<span style='background:#fff9c4;font-weight:600'>"
-                f"{adversarial[j1:j2]}</span>"
+                f"<span style='background:rgba(255,193,7,0.3);font-weight:600;"
+                f"border-radius:2px;padding:0 1px'>{adversarial[j1:j2]}</span>"
             )
         elif tag == "delete":
             parts.append(
-                f"<span style='background:#ffcdd2;text-decoration:line-through'>"
-                f"{baseline[i1:i2]}</span>"
+                f"<span style='background:rgba(244,67,54,0.2);"
+                f"text-decoration:line-through;border-radius:2px;"
+                f"padding:0 1px'>{baseline[i1:i2]}</span>"
             )
     return "".join(parts)
 
@@ -294,36 +295,11 @@ with st.sidebar:
     if st.button("Sign out", use_container_width=True):
         _logout()
 
-    st.divider()
-    st.metric("Progress", f"{completed} / {total}")
     st.progress(completed / total if total else 0)
+    st.caption(f"{completed} / {total} annotated")
 
     if completed == total:
         st.success("All rows annotated.")
-
-    st.divider()
-    with st.expander("Instructions"):
-        st.markdown("""
-**Compare the Baseline with the Adversarial output.**
-
-**Q1 — Source disappeared?**
-Did the "intended source" token/phrase disappear from the adversarial text?
-
-**Q2 — Target appeared?**
-Did the "intended target" token/phrase appear at roughly the same position?
-
-**Q3 — Extra meaning changed?**
-Did anything *else* in meaning change beyond the intended edit?
-
-**Q4 — Obvious artifact?**
-Repeated words, nonsense, truncation, corrupted text, degeneration.
-
-**Q5 — Plausible but wrong?**
-Grammatically fine but semantically off in a way unrelated to the intended edit.
-
----
-*Ignore:* punctuation, capitalization, spacing, "ten" vs "10".
-""")
 
     # Download own annotations (blind export)
     if annotations:
@@ -337,10 +313,10 @@ Grammatically fine but semantically off in a way unrelated to the intended edit.
             "annotator_note", "clean_success", "partial_success", "target_miss",
         ])
         writer.writeheader()
-        for idx in sorted(annotations.keys()):
-            ann = annotations[idx]
+        for _dl_idx in sorted(annotations.keys()):
+            ann = annotations[_dl_idx]
             writer.writerow({
-                "judge_id": ann.get("judge_id", rows[idx]["judge_id"]),
+                "judge_id": ann.get("judge_id", rows[_dl_idx]["judge_id"]),
                 "source_disappeared": ann.get("source_disappeared", ""),
                 "target_appeared": ann.get("target_appeared", ""),
                 "extra_meaning_changed": ann.get("extra_meaning_changed", ""),
@@ -378,13 +354,13 @@ row = rows[idx]
 
 nav1, nav2, nav3 = st.columns([1, 2, 1])
 with nav1:
-    if st.button("← Previous", disabled=(idx == 0), use_container_width=True):
+    if st.button("← Prev", disabled=(idx == 0), use_container_width=True):
         st.session_state.current_idx -= 1
         st.rerun()
 with nav2:
     st.markdown(
-        f"<div style='text-align:center;padding:8px 0;font-size:0.9em'>"
-        f"<strong>{idx + 1}</strong> of {total}</div>",
+        f"<div style='text-align:center;padding:4px 0;font-size:0.85em;opacity:0.7'>"
+        f"<strong>{idx + 1}</strong> / {total}</div>",
         unsafe_allow_html=True,
     )
 with nav3:
@@ -392,50 +368,47 @@ with nav3:
         st.session_state.current_idx += 1
         st.rerun()
 
-st.divider()
-
 # ============================================================
-# ROW DISPLAY
+# ROW DISPLAY — compact header + text blocks
 # ============================================================
 
-# Header: judge_id + target context
 judge_id = row["judge_id"]
 target_kind = row["target_kind"]
 source_surf = row["intended_source_surface"]
 target_surf = row["intended_target_surface"]
+kind_label = TARGET_KIND_DISPLAY.get(target_kind, target_kind)
 
-col_id, col_edit = st.columns([1, 2])
-with col_id:
-    st.caption("ID")
-    st.markdown(f"**{judge_id}**")
-with col_edit:
-    kind_label = TARGET_KIND_DISPLAY.get(target_kind, target_kind)
-    st.caption("Intended edit")
-    st.markdown(f"**{kind_label}:**  `{source_surf}` → `{target_surf}`")
+# Single-line header strip
+st.markdown(
+    f"<div style='font-size:0.82em;opacity:0.6;margin-top:4px'>"
+    f"{judge_id} &nbsp;&middot;&nbsp; {kind_label}: "
+    f"<code>{source_surf}</code> &rarr; <code>{target_surf}</code></div>",
+    unsafe_allow_html=True,
+)
 
-st.divider()
-
-# Texts
 baseline = row["quant_pred"]
 adversarial = row["adversarial_pred"]
-
-st.markdown("##### Baseline")
-st.markdown(
-    f"<div style='padding:12px 16px;background:#f8f9fa;border-radius:6px;"
-    f"font-size:1.05em;line-height:1.6'>{baseline}</div>",
-    unsafe_allow_html=True,
-)
-
-st.markdown("")
-st.markdown("##### Adversarial")
 diff_html = _render_diff(baseline, adversarial)
+
+# Theme-safe text blocks — transparent bg, subtle border via currentColor
+_text_box = (
+    "padding:10px 14px;border-radius:5px;font-size:1.02em;line-height:1.55;"
+    "border:1px solid currentColor;opacity:0.92;margin:4px 0"
+)
+
 st.markdown(
-    f"<div style='padding:12px 16px;background:#ffffff;border:1px solid #e0e0e0;"
-    f"border-radius:6px;font-size:1.05em;line-height:1.6'>{diff_html}</div>",
+    f"<div style='font-size:0.78em;opacity:0.5;margin-top:8px;margin-bottom:2px'>"
+    f"BASELINE</div>"
+    f"<div style='{_text_box}'>{baseline}</div>",
     unsafe_allow_html=True,
 )
 
-st.divider()
+st.markdown(
+    f"<div style='font-size:0.78em;opacity:0.5;margin-top:6px;margin-bottom:2px'>"
+    f"ADVERSARIAL</div>"
+    f"<div style='{_text_box}'>{diff_html}</div>",
+    unsafe_allow_html=True,
+)
 
 # ============================================================
 # ANNOTATION FORM
@@ -453,7 +426,6 @@ def _idx_for(field, options):
 
 
 with st.form("annotate", clear_on_submit=False):
-    # Q1 and Q2 side by side
     c1, c2 = st.columns(2)
     with c1:
         q1 = st.radio(
@@ -461,6 +433,7 @@ with st.form("annotate", clear_on_submit=False):
             ["Yes", "No", "N/A"],
             index=_idx_for("source_disappeared", ["Yes", "No", "N/A"]),
             horizontal=True,
+            help="Is the intended source token/phrase gone from the adversarial text?",
         )
     with c2:
         q2 = st.radio(
@@ -468,9 +441,9 @@ with st.form("annotate", clear_on_submit=False):
             ["Yes", "No", "N/A"],
             index=_idx_for("target_appeared", ["Yes", "No", "N/A"]),
             horizontal=True,
+            help="Did the intended target appear at roughly the right position?",
         )
 
-    # Q3, Q4, Q5
     c3, c4, c5 = st.columns(3)
     with c3:
         q3 = st.radio(
@@ -478,6 +451,7 @@ with st.form("annotate", clear_on_submit=False):
             ["Yes", "No"],
             index=_idx_for("extra_meaning_changed", ["Yes", "No"]),
             horizontal=True,
+            help="Did anything else change in meaning beyond the intended edit?",
         )
     with c4:
         q4 = st.radio(
@@ -485,6 +459,7 @@ with st.form("annotate", clear_on_submit=False):
             ["Yes", "No"],
             index=_idx_for("obvious_artifact", ["Yes", "No"]),
             horizontal=True,
+            help="Repeated words, nonsense, truncation, corrupted text, degeneration.",
         )
     with c5:
         q5 = st.radio(
@@ -492,6 +467,7 @@ with st.form("annotate", clear_on_submit=False):
             ["Yes", "No"],
             index=_idx_for("plausible_but_wrong", ["Yes", "No"]),
             horizontal=True,
+            help="Grammatically fine but semantically off, unrelated to the intended edit.",
         )
 
     note = st.text_input(
@@ -499,6 +475,7 @@ with st.form("annotate", clear_on_submit=False):
         value=existing.get("annotator_note", ""),
     )
 
+    st.caption("*Ignore: punctuation, capitalization, spacing, 'ten' vs '10'.*")
     submitted = st.form_submit_button("Save & Next", use_container_width=True)
 
 if submitted:
