@@ -31,20 +31,43 @@ st.set_page_config(
     page_icon=None,
 )
 
-# Compact form styling — tighten Streamlit's default radio/label padding
+# Form styling — consistent grid, aligned baselines, compact rhythm
 st.markdown("""<style>
-/* Tighten radio button group spacing */
-div[data-testid="stForm"] .stRadio > div {gap: 0.3rem;}
-div[data-testid="stForm"] .stRadio > label {margin-bottom: 0.15rem; font-size: 0.92em;}
-div[data-testid="stForm"] .stRadio > div[role="radiogroup"] {gap: 0.4rem;}
-/* Tighten column gaps inside the form */
-div[data-testid="stForm"] [data-testid="stHorizontalBlock"] {gap: 0.5rem;}
-/* Reduce form internal padding */
-div[data-testid="stForm"] > div:first-child {padding-top: 0.6rem; padding-bottom: 0.3rem;}
-/* Compact text input */
-div[data-testid="stForm"] .stTextInput {margin-top: -0.3rem;}
-/* Slightly smaller submit button top margin */
-div[data-testid="stForm"] .stFormSubmitButton {margin-top: 0.2rem;}
+/* Uniform column gap inside form rows */
+div[data-testid="stForm"] [data-testid="stHorizontalBlock"] {
+    gap: 0.6rem;
+}
+/* Question label: fixed min-height so controls align across columns */
+div[data-testid="stForm"] .stRadio > label {
+    font-size: 0.9em;
+    min-height: 2.6em;
+    display: flex;
+    align-items: flex-end;
+    margin-bottom: 0.1rem;
+    line-height: 1.25;
+}
+/* Radio button row: tight, left-aligned */
+div[data-testid="stForm"] .stRadio > div[role="radiogroup"] {
+    gap: 0.35rem;
+    justify-content: flex-start;
+}
+/* Reduce vertical gap between label and radio group */
+div[data-testid="stForm"] .stRadio > div {
+    gap: 0.15rem;
+}
+/* Form card internal padding */
+div[data-testid="stForm"] > div:first-child {
+    padding-top: 0.5rem;
+    padding-bottom: 0.2rem;
+}
+/* Compact note field */
+div[data-testid="stForm"] .stTextInput {
+    margin-top: -0.2rem;
+}
+/* Submit button snug */
+div[data-testid="stForm"] .stFormSubmitButton {
+    margin-top: 0.15rem;
+}
 </style>""", unsafe_allow_html=True)
 
 # Columns fetched from packet_metadata for annotation display
@@ -436,8 +459,9 @@ def _ri(field, options):
 
 
 with st.form("annotate", clear_on_submit=False):
-    c1, c2 = st.columns(2)
-    with c1:
+    # Row 1: Q1, Q2, Q3 — three equal columns
+    r1c1, r1c2, r1c3 = st.columns(3)
+    with r1c1:
         q1 = st.radio(
             f'Did "{source_surf}" disappear?',
             ["Yes", "No", "Can't tell"],
@@ -445,7 +469,7 @@ with st.form("annotate", clear_on_submit=False):
             horizontal=True,
             help="Look for this word or phrase in the Baseline. Is it missing from the Adversarial text?",
         )
-    with c2:
+    with r1c2:
         q2 = st.radio(
             f'Did "{target_surf}" appear in the right place?',
             ["Yes", "No", "Can't tell"],
@@ -453,17 +477,18 @@ with st.form("annotate", clear_on_submit=False):
             horizontal=True,
             help="Does this word or phrase show up in the Adversarial text where the source used to be?",
         )
-
-    c3, c4, c5 = st.columns(3)
-    with c3:
+    with r1c3:
         q3 = st.radio(
-            "Did anything else in meaning change?",
+            "Anything else in meaning change?",
             ["Yes", "No"],
             index=_ri("extra_meaning_changed", ["Yes", "No"]),
             horizontal=True,
             help="Aside from the intended edit, did the rest of the sentence change in meaning?",
         )
-    with c4:
+
+    # Row 2: Q4, Q5, (empty) — same three-column grid
+    r2c1, r2c2, r2c3 = st.columns(3)
+    with r2c1:
         q4 = st.radio(
             "Does the output look broken?",
             ["Yes", "No"],
@@ -471,14 +496,16 @@ with st.form("annotate", clear_on_submit=False):
             horizontal=True,
             help="Repeated words, gibberish, cut-off text, garbled characters, or obvious nonsense.",
         )
-    with c5:
+    with r2c2:
         q5 = st.radio(
-            "Sounds normal but says the wrong thing?",
+            "Sounds normal but wrong?",
             ["Yes", "No"],
             index=_ri("plausible_but_wrong", ["Yes", "No"]),
             horizontal=True,
             help="The sentence reads fine but says something different or incorrect beyond the intended edit.",
         )
+    with r2c3:
+        pass  # Empty — maintains grid alignment
 
     st.caption('*Ignore punctuation, capitalization, spacing, and "ten" vs "10".*')
 
