@@ -21,4 +21,7 @@ annotated_*.csv
 .streamlit/secrets.toml
 
 docs/
-*.sql
+
+# Annotator credentials (local only — never commit)
+annotators.csv
+annotators_seed.sql

@@ -13,7 +13,8 @@
       "Bash(python scripts/build_packet_from_v3.py)",
       "Bash(python -c ':*)",
       "Bash(python scripts/build_packet_from_input.py)",
-      "Bash(python scripts/build_packet_final.py)"
+      "Bash(python scripts/build_packet_final.py)",
+      "Bash(python scripts/seed_annotators.py)"
     ]
   }
 }
