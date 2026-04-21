@@ -8,11 +8,13 @@ Hidden metadata (method, model, preset, etc.) is never fetched or displayed.
 
 Architecture:
   - packet_metadata table: loaded by researcher via separate script
-  - annotations_v4 table: written by this app
+  - annotations_v4 table: written by this app (human submissions only)
   - Export/reporting: researcher joins the two tables offline
 """
 
+import csv
 import difflib
+import io
 from datetime import datetime, timezone
 
 import bcrypt
@@ -29,7 +31,7 @@ st.set_page_config(
     page_icon=None,
 )
 
-# Columns fetched from packet_metadata (blind subset only)
+# Columns fetched from packet_metadata for annotation display
 BLIND_COLUMNS = [
     "judge_id",
     "target_kind",
@@ -37,6 +39,7 @@ BLIND_COLUMNS = [
     "intended_target_surface",
     "quant_pred",
     "adversarial_pred",
+    "auto_decision_type",  # used to filter; never shown to annotator
 ]
 
 TARGET_KIND_DISPLAY = {
@@ -44,6 +47,12 @@ TARGET_KIND_DISPLAY = {
     "neg": "Negation",
     "ent": "Entity",
 }
+
+EXPORT_FIELDS = [
+    "judge_id", "source_disappeared", "target_appeared",
+    "extra_meaning_changed", "obvious_artifact", "plausible_but_wrong",
+    "annotator_note", "clean_success", "partial_success", "target_miss",
+]
 
 # ============================================================
 # SESSION STATE
@@ -53,9 +62,10 @@ _DEFAULTS = {
     "authenticated": False,
     "username": None,
     "current_idx": 0,
-    "annotations": {},
-    "rows": None,
-    "total_rows": 0,
+    "annotations": {},       # keyed by presentable index
+    "all_rows": None,        # all rows from packet_metadata
+    "presentable": None,     # list of indices into all_rows (excludes auto-decided)
+    "auto_decided_count": 0,
 }
 for _k, _v in _DEFAULTS.items():
     if _k not in st.session_state:
@@ -67,9 +77,7 @@ for _k, _v in _DEFAULTS.items():
 # ============================================================
 
 def _get_client():
-    url = st.secrets["supabase_url"]
-    key = st.secrets["supabase_key"]
-    return create_client(url, key)
+    return create_client(st.secrets["supabase_url"], st.secrets["supabase_key"])
 
 
 # ============================================================
@@ -86,18 +94,15 @@ def _verify_password(plain: str, hashed: str) -> bool:
 def _show_login():
     st.title("SMASH Human-Eval")
     st.caption("Sign in to begin annotation.")
-
     with st.form("login"):
         username = st.text_input("Username")
         password = st.text_input("Password", type="password")
         submit = st.form_submit_button("Sign in", use_container_width=True)
-
     if submit:
         username = (username or "").strip()
         if not username or not password:
             st.error("Enter both username and password.")
             return
-
         client = _get_client()
         result = (
             client.table("app_users")
@@ -109,7 +114,6 @@ def _show_login():
         if not result.data:
             st.error("Invalid credentials.")
             return
-
         user = result.data[0]
         if not user.get("is_active", True):
             st.error("Account disabled.")
@@ -117,7 +121,6 @@ def _show_login():
         if not _verify_password(password, user["password_hash"]):
             st.error("Invalid credentials.")
             return
-
         st.session_state.authenticated = True
         st.session_state.username = user["username"]
         st.rerun()
@@ -134,24 +137,19 @@ def _logout():
 # ============================================================
 
 def _load_rows():
-    """Fetch blind columns from packet_metadata."""
+    """Fetch blind columns + auto_decision_type from packet_metadata."""
     client = _get_client()
-    columns = ",".join(BLIND_COLUMNS)
-
-    query = client.table("packet_metadata").select(columns)
-
-    # Filter by packet version if configured
+    query = client.table("packet_metadata").select(",".join(BLIND_COLUMNS))
     pv = st.secrets.get("packet_version")
     if pv:
         query = query.eq("packet_version", pv)
-
     query = query.order("judge_id")
     result = query.execute()
     return result.data or []
 
 
-def _load_existing_annotations(username: str):
-    """Load this annotator's existing annotations."""
+def _load_existing_annotations(username: str, presentable_rows):
+    """Load this annotator's existing annotations. Returns dict keyed by presentable index."""
     client = _get_client()
     result = (
         client.table("annotations_v4")
@@ -161,22 +159,20 @@ def _load_existing_annotations(username: str):
         .eq("username", username)
         .execute()
     )
+    jid_to_pidx = {r["judge_id"]: pi for pi, r in enumerate(presentable_rows)}
     annotations = {}
-    rows = st.session_state.rows or []
-    judge_id_to_idx = {r["judge_id"]: i for i, r in enumerate(rows)}
     for rec in (result.data or []):
-        idx = judge_id_to_idx.get(rec["judge_id"])
-        if idx is not None:
-            annotations[idx] = rec
+        pidx = jid_to_pidx.get(rec["judge_id"])
+        if pidx is not None:
+            annotations[pidx] = rec
     return annotations
 
 
 # ============================================================
-# ANNOTATION PERSISTENCE
+# PERSISTENCE
 # ============================================================
 
 def _save_annotation(username: str, judge_id: str, record: dict):
-    """Upsert annotation to Supabase."""
     payload = {
         "username": username,
         "judge_id": judge_id,
@@ -198,10 +194,11 @@ def _save_annotation(username: str, judge_id: str, record: dict):
 
 
 # ============================================================
-# VERDICT COMPUTATION
+# VERDICTS
 # ============================================================
 
 def _compute_verdicts(q1, q2, q3, q4, q5):
+    # "Can't tell" on Q1/Q2 is treated as not-Yes (conservative)
     clean = (
         q1 == "Yes" and q2 == "Yes"
         and q3 == "No" and q4 == "No" and q5 == "No"
@@ -216,11 +213,10 @@ def _compute_verdicts(q1, q2, q3, q4, q5):
 
 
 # ============================================================
-# DIFF DISPLAY
+# DIFF RENDERING
 # ============================================================
 
 def _render_diff(baseline: str, adversarial: str) -> str:
-    """Character-level diff with theme-safe inline styling."""
     parts = []
     for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(
         None, baseline, adversarial
@@ -258,22 +254,37 @@ if not st.session_state.authenticated:
 # LOAD DATA (once per session)
 # ============================================================
 
-if st.session_state.rows is None:
+if st.session_state.all_rows is None:
     with st.spinner("Loading..."):
-        rows = _load_rows()
-        st.session_state.rows = rows
-        st.session_state.total_rows = len(rows)
+        all_rows = _load_rows()
+
+        # Separate presentable vs auto-decided rows
+        presentable = []
+        auto_count = 0
+        for r in all_rows:
+            if (r.get("auto_decision_type") or "").strip():
+                auto_count += 1
+            else:
+                presentable.append(r)
+
+        st.session_state.all_rows = all_rows
+        st.session_state.presentable = presentable
+        st.session_state.auto_decided_count = auto_count
+
+        # Load existing annotations and resume
         st.session_state.annotations = _load_existing_annotations(
-            st.session_state.username
+            st.session_state.username, presentable
         )
-        # Jump to first unannotated
-        for i in range(len(rows)):
+        # Jump to first unannotated presentable row
+        st.session_state.current_idx = 0
+        for i in range(len(presentable)):
             if i not in st.session_state.annotations:
                 st.session_state.current_idx = i
                 break
 
-rows = st.session_state.rows
-total = st.session_state.total_rows
+presentable = st.session_state.presentable
+total = len(presentable)
+auto_count = st.session_state.auto_decided_count
 annotations = st.session_state.annotations
 completed = len(annotations)
 
@@ -283,11 +294,14 @@ completed = len(annotations)
 
 if total == 0:
     st.title("SMASH Human-Eval")
-    st.info("No rows available for annotation.")
+    if auto_count > 0:
+        st.info(f"All {auto_count} rows were auto-decided (identical output). Nothing to annotate.")
+    else:
+        st.info("No rows available for annotation.")
     st.stop()
 
 # ============================================================
-# SIDEBAR — minimal
+# SIDEBAR
 # ============================================================
 
 with st.sidebar:
@@ -296,38 +310,24 @@ with st.sidebar:
         _logout()
 
     st.progress(completed / total if total else 0)
-    st.caption(f"{completed} / {total} annotated")
+    prog_text = f"{completed} / {total} annotated"
+    if auto_count > 0:
+        prog_text += f"  \n{auto_count} auto-decided"
+    st.caption(prog_text)
 
     if completed == total:
         st.success("All rows annotated.")
 
-    # Download own annotations (blind export)
     if annotations:
-        import csv
-        import io
-
         buf = io.StringIO()
-        writer = csv.DictWriter(buf, fieldnames=[
-            "judge_id", "source_disappeared", "target_appeared",
-            "extra_meaning_changed", "obvious_artifact", "plausible_but_wrong",
-            "annotator_note", "clean_success", "partial_success", "target_miss",
-        ])
+        writer = csv.DictWriter(buf, fieldnames=EXPORT_FIELDS)
         writer.writeheader()
-        for _dl_idx in sorted(annotations.keys()):
-            ann = annotations[_dl_idx]
+        for _di in sorted(annotations.keys()):
+            ann = annotations[_di]
             writer.writerow({
-                "judge_id": ann.get("judge_id", rows[_dl_idx]["judge_id"]),
-                "source_disappeared": ann.get("source_disappeared", ""),
-                "target_appeared": ann.get("target_appeared", ""),
-                "extra_meaning_changed": ann.get("extra_meaning_changed", ""),
-                "obvious_artifact": ann.get("obvious_artifact", ""),
-                "plausible_but_wrong": ann.get("plausible_but_wrong", ""),
-                "annotator_note": ann.get("annotator_note", ""),
-                "clean_success": ann.get("clean_success", ""),
-                "partial_success": ann.get("partial_success", ""),
-                "target_miss": ann.get("target_miss", ""),
+                "judge_id": ann.get("judge_id", presentable[_di]["judge_id"]),
+                **{f: ann.get(f, "") for f in EXPORT_FIELDS if f != "judge_id"},
             })
-
         st.download_button(
             "Download my annotations",
             buf.getvalue(),
@@ -346,7 +346,7 @@ if st.session_state.current_idx < 0:
     st.session_state.current_idx = 0
 
 idx = st.session_state.current_idx
-row = rows[idx]
+row = presentable[idx]
 
 # ============================================================
 # NAVIGATION
@@ -359,7 +359,7 @@ with nav1:
         st.rerun()
 with nav2:
     st.markdown(
-        f"<div style='text-align:center;padding:4px 0;font-size:0.85em;opacity:0.7'>"
+        f"<div style='text-align:center;padding:4px 0;font-size:0.85em;opacity:0.6'>"
         f"<strong>{idx + 1}</strong> / {total}</div>",
         unsafe_allow_html=True,
     )
@@ -369,7 +369,7 @@ with nav3:
         st.rerun()
 
 # ============================================================
-# ROW DISPLAY — compact header + text blocks
+# ROW DISPLAY
 # ============================================================
 
 judge_id = row["judge_id"]
@@ -378,11 +378,14 @@ source_surf = row["intended_source_surface"]
 target_surf = row["intended_target_surface"]
 kind_label = TARGET_KIND_DISPLAY.get(target_kind, target_kind)
 
-# Single-line header strip
+# Intended edit prominent, judge_id secondary
 st.markdown(
-    f"<div style='font-size:0.82em;opacity:0.6;margin-top:4px'>"
-    f"{judge_id} &nbsp;&middot;&nbsp; {kind_label}: "
-    f"<code>{source_surf}</code> &rarr; <code>{target_surf}</code></div>",
+    f"<div style='margin-top:2px'>"
+    f"<span style='font-size:1.05em;font-weight:600'>"
+    f"{kind_label}: &ldquo;{source_surf}&rdquo; &rarr; &ldquo;{target_surf}&rdquo;"
+    f"</span>"
+    f"<span style='float:right;font-size:0.78em;opacity:0.4'>{judge_id}</span>"
+    f"</div>",
     unsafe_allow_html=True,
 )
 
@@ -390,23 +393,22 @@ baseline = row["quant_pred"]
 adversarial = row["adversarial_pred"]
 diff_html = _render_diff(baseline, adversarial)
 
-# Theme-safe text blocks — transparent bg, subtle border via currentColor
-_text_box = (
+_box = (
     "padding:10px 14px;border-radius:5px;font-size:1.02em;line-height:1.55;"
-    "border:1px solid currentColor;opacity:0.92;margin:4px 0"
+    "border:1px solid rgba(128,128,128,0.25);margin:3px 0"
 )
 
 st.markdown(
-    f"<div style='font-size:0.78em;opacity:0.5;margin-top:8px;margin-bottom:2px'>"
-    f"BASELINE</div>"
-    f"<div style='{_text_box}'>{baseline}</div>",
+    f"<div style='font-size:0.72em;opacity:0.45;margin-top:10px;margin-bottom:1px;"
+    f"text-transform:uppercase;letter-spacing:0.05em'>Baseline</div>"
+    f"<div style='{_box}'>{baseline}</div>",
     unsafe_allow_html=True,
 )
 
 st.markdown(
-    f"<div style='font-size:0.78em;opacity:0.5;margin-top:6px;margin-bottom:2px'>"
-    f"ADVERSARIAL</div>"
-    f"<div style='{_text_box}'>{diff_html}</div>",
+    f"<div style='font-size:0.72em;opacity:0.45;margin-top:8px;margin-bottom:1px;"
+    f"text-transform:uppercase;letter-spacing:0.05em'>Adversarial</div>"
+    f"<div style='{_box}'>{diff_html}</div>",
     unsafe_allow_html=True,
 )
 
@@ -417,57 +419,54 @@ st.markdown(
 existing = annotations.get(idx, {})
 
 
-def _idx_for(field, options):
-    """Return radio index for a previously-saved value."""
+def _ri(field, options):
     val = existing.get(field)
-    if val in options:
-        return options.index(val)
-    return None
+    return options.index(val) if val in options else None
 
 
 with st.form("annotate", clear_on_submit=False):
     c1, c2 = st.columns(2)
     with c1:
         q1 = st.radio(
-            f'Q1. Did "{source_surf}" disappear?',
-            ["Yes", "No", "N/A"],
-            index=_idx_for("source_disappeared", ["Yes", "No", "N/A"]),
+            f'Did "{source_surf}" disappear?',
+            ["Yes", "No", "Can't tell"],
+            index=_ri("source_disappeared", ["Yes", "No", "Can't tell"]),
             horizontal=True,
-            help="Is the intended source token/phrase gone from the adversarial text?",
+            help="Look for this word or phrase in the Baseline. Is it missing from the Adversarial text?",
         )
     with c2:
         q2 = st.radio(
-            f'Q2. Did "{target_surf}" appear correctly?',
-            ["Yes", "No", "N/A"],
-            index=_idx_for("target_appeared", ["Yes", "No", "N/A"]),
+            f'Did "{target_surf}" appear in the right place?',
+            ["Yes", "No", "Can't tell"],
+            index=_ri("target_appeared", ["Yes", "No", "Can't tell"]),
             horizontal=True,
-            help="Did the intended target appear at roughly the right position?",
+            help="Does this word or phrase show up in the Adversarial text where the source used to be?",
         )
 
     c3, c4, c5 = st.columns(3)
     with c3:
         q3 = st.radio(
-            "Q3. Extra meaning changed?",
+            "Did anything else in meaning change?",
             ["Yes", "No"],
-            index=_idx_for("extra_meaning_changed", ["Yes", "No"]),
+            index=_ri("extra_meaning_changed", ["Yes", "No"]),
             horizontal=True,
-            help="Did anything else change in meaning beyond the intended edit?",
+            help="Aside from the intended edit, did the rest of the sentence change in meaning?",
         )
     with c4:
         q4 = st.radio(
-            "Q4. Obvious artifact?",
+            "Does the output look broken?",
             ["Yes", "No"],
-            index=_idx_for("obvious_artifact", ["Yes", "No"]),
+            index=_ri("obvious_artifact", ["Yes", "No"]),
             horizontal=True,
-            help="Repeated words, nonsense, truncation, corrupted text, degeneration.",
+            help="Repeated words, gibberish, cut-off text, garbled characters, or obvious nonsense.",
         )
     with c5:
         q5 = st.radio(
-            "Q5. Plausible but wrong?",
+            "Sounds normal but says the wrong thing?",
             ["Yes", "No"],
-            index=_idx_for("plausible_but_wrong", ["Yes", "No"]),
+            index=_ri("plausible_but_wrong", ["Yes", "No"]),
             horizontal=True,
-            help="Grammatically fine but semantically off, unrelated to the intended edit.",
+            help="The sentence reads fine but says something different or incorrect beyond the intended edit.",
         )
 
     note = st.text_input(
@@ -475,23 +474,11 @@ with st.form("annotate", clear_on_submit=False):
         value=existing.get("annotator_note", ""),
     )
 
-    st.caption("*Ignore: punctuation, capitalization, spacing, 'ten' vs '10'.*")
+    st.caption('*Ignore: punctuation, capitalization, spacing, "ten" vs "10".*')
     submitted = st.form_submit_button("Save & Next", use_container_width=True)
 
 if submitted:
-    # Validate all answered
-    missing = []
-    if q1 is None:
-        missing.append("Q1")
-    if q2 is None:
-        missing.append("Q2")
-    if q3 is None:
-        missing.append("Q3")
-    if q4 is None:
-        missing.append("Q4")
-    if q5 is None:
-        missing.append("Q5")
-
+    missing = [f"Q{i+1}" for i, v in enumerate([q1, q2, q3, q4, q5]) if v is None]
     if missing:
         st.error(f"Please answer: {', '.join(missing)}")
     else:
@@ -506,7 +493,6 @@ if submitted:
             "annotator_note": note,
             **verdicts,
         }
-        # Persist
         try:
             _save_annotation(st.session_state.username, judge_id, record)
         except Exception as exc:
@@ -514,12 +500,14 @@ if submitted:
 
         st.session_state.annotations[idx] = record
 
-        # Advance to next unannotated
-        if idx < total - 1:
-            next_idx = idx + 1
-            for i in range(idx + 1, total):
-                if i not in st.session_state.annotations:
-                    next_idx = i
-                    break
-            st.session_state.current_idx = next_idx
+        # Advance to next unannotated presentable row
+        next_idx = idx
+        for i in range(idx + 1, total):
+            if i not in st.session_state.annotations:
+                next_idx = i
+                break
+        else:
+            # All remaining are annotated; stay or wrap
+            next_idx = min(idx + 1, total - 1)
+        st.session_state.current_idx = next_idx
         st.rerun()

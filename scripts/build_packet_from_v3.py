@@ -54,6 +54,7 @@ OUTPUT_COLUMNS = [
     "packet_version",
     "source_run_dir",
     "source_jsonl",
+    "auto_decision_type",
 ]
 
 
@@ -119,6 +120,9 @@ def main():
             "packet_version": "v3",
             "source_run_dir": src.get("source_run_dir", ""),
             "source_jsonl": src.get("source_jsonl", ""),
+            "auto_decision_type": (
+                "identical_decode" if quant_pred == adversarial_pred else ""
+            ),
         }
         output_rows.append(out)
 
