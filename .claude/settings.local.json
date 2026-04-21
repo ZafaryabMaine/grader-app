@@ -11,7 +11,9 @@
       "Bash(python -c \"import ast; ast.parse\\(open\\('grader_filtered.py'\\).read\\(\\)\\); print\\('OK'\\)\")",
       "Bash(python -c \"import ast; ast.parse\\(open\\('grader_filtered.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")",
       "Bash(python scripts/build_packet_from_v3.py)",
-      "Bash(python -c ':*)"
+      "Bash(python -c ':*)",
+      "Bash(python scripts/build_packet_from_input.py)",
+      "Bash(python scripts/build_packet_final.py)"
     ]
   }
 }
