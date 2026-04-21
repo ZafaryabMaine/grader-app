@@ -109,7 +109,7 @@ TARGET_KIND_DISPLAY = {
 
 EXPORT_FIELDS = [
     "judge_id", "source_disappeared", "target_appeared",
-    "extra_meaning_changed", "obvious_artifact",
+    "extra_meaning_changed", "obvious_artifact", "plausible_but_wrong",
     "annotator_note", "clean_success", "partial_success", "target_miss",
 ]
 
@@ -213,7 +213,8 @@ def _load_existing_annotations(username: str, presentable_rows):
     result = (
         client.table("annotations_v4")
         .select("judge_id, source_disappeared, target_appeared, "
-                "extra_meaning_changed, obvious_artifact, annotator_note")
+                "extra_meaning_changed, obvious_artifact, plausible_but_wrong, "
+                "annotator_note")
         .eq("username", username)
         .execute()
     )
@@ -239,6 +240,7 @@ def _save_annotation(username: str, judge_id: str, record: dict):
         "target_appeared": record["target_appeared"],
         "extra_meaning_changed": record["extra_meaning_changed"],
         "obvious_artifact": record["obvious_artifact"],
+        "plausible_but_wrong": record["plausible_but_wrong"],
         "annotator_note": record.get("annotator_note", ""),
         "clean_success": record["clean_success"],
         "partial_success": record["partial_success"],
@@ -254,11 +256,11 @@ def _save_annotation(username: str, judge_id: str, record: dict):
 # VERDICTS
 # ============================================================
 
-def _compute_verdicts(q1, q2, q3, q4):
-    # "Unsure" on any question is treated as not-Yes / not-No (conservative)
+def _compute_verdicts(q1, q2, q3, q4, q5):
+    # "Unsure" on Q1/Q2 is treated as not-Yes (conservative)
     clean = (
         q1 == "Yes" and q2 == "Yes"
-        and q3 == "No" and q4 == "No"
+        and q3 == "No" and q4 == "No" and q5 == "No"
     )
     partial = (q1 == "Yes" and q2 == "Yes" and not clean)
     miss = (q1 != "Yes" or q2 != "Yes")
@@ -456,24 +458,22 @@ def _ri(field, options):
     return options.index(val) if val in options else None
 
 
-_opts3 = ["Yes", "No", "Unsure"]
-
 with st.form("annotate", clear_on_submit=False):
     # Row 1: Q1, Q2
     r1a, r1b = st.columns(2)
     with r1a:
         q1 = st.radio(
             f'Did "{source_surf}" disappear?',
-            _opts3,
-            index=_ri("source_disappeared", _opts3),
+            ["Yes", "No", "Unsure"],
+            index=_ri("source_disappeared", ["Yes", "No", "Unsure"]),
             horizontal=True,
             help="Look for this word or phrase in the Baseline. Is it missing from the Adversarial text?",
         )
     with r1b:
         q2 = st.radio(
             f'Did "{target_surf}" appear in the right place?',
-            _opts3,
-            index=_ri("target_appeared", _opts3),
+            ["Yes", "No", "Unsure"],
+            index=_ri("target_appeared", ["Yes", "No", "Unsure"]),
             horizontal=True,
             help="Does this word or phrase show up in the Adversarial text where the source used to be?",
         )
@@ -483,19 +483,32 @@ with st.form("annotate", clear_on_submit=False):
     with r2a:
         q3 = st.radio(
             "Did anything else in meaning change?",
-            _opts3,
-            index=_ri("extra_meaning_changed", _opts3),
+            ["Yes", "No"],
+            index=_ri("extra_meaning_changed", ["Yes", "No"]),
             horizontal=True,
             help="Aside from the intended edit, did the rest of the sentence change in meaning?",
         )
     with r2b:
         q4 = st.radio(
             "Does the output look broken?",
-            _opts3,
-            index=_ri("obvious_artifact", _opts3),
+            ["Yes", "No"],
+            index=_ri("obvious_artifact", ["Yes", "No"]),
             horizontal=True,
             help="Repeated words, gibberish, cut-off text, garbled characters, or obvious nonsense.",
         )
+
+    # Row 3: Q5 alone — same 2-col grid, second column empty
+    r3a, r3b = st.columns(2)
+    with r3a:
+        q5 = st.radio(
+            "Sounds normal but says the wrong thing?",
+            ["Yes", "No"],
+            index=_ri("plausible_but_wrong", ["Yes", "No"]),
+            horizontal=True,
+            help="The sentence reads fine but says something different or incorrect beyond the intended edit.",
+        )
+    with r3b:
+        pass  # Empty — preserves grid alignment
 
     st.caption('*Ignore punctuation, capitalization, spacing, and "ten" vs "10".*')
 
@@ -507,17 +520,18 @@ with st.form("annotate", clear_on_submit=False):
     submitted = st.form_submit_button("Save & Next", use_container_width=True)
 
 if submitted:
-    missing = [f"Q{i+1}" for i, v in enumerate([q1, q2, q3, q4]) if v is None]
+    missing = [f"Q{i+1}" for i, v in enumerate([q1, q2, q3, q4, q5]) if v is None]
     if missing:
         st.error(f"Please answer: {', '.join(missing)}")
     else:
-        verdicts = _compute_verdicts(q1, q2, q3, q4)
+        verdicts = _compute_verdicts(q1, q2, q3, q4, q5)
         record = {
             "judge_id": judge_id,
             "source_disappeared": q1,
             "target_appeared": q2,
             "extra_meaning_changed": q3,
             "obvious_artifact": q4,
+            "plausible_but_wrong": q5,
             "annotator_note": note,
             **verdicts,
         }
