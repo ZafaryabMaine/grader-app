@@ -31,42 +31,74 @@ st.set_page_config(
     page_icon=None,
 )
 
-# Form styling — consistent grid, aligned baselines, compact rhythm
+# Form styling — grid alignment, visual hierarchy, selected-state clarity
 st.markdown("""<style>
-/* Uniform column gap inside form rows */
+/* --- Grid rhythm --- */
 div[data-testid="stForm"] [data-testid="stHorizontalBlock"] {
     gap: 0.6rem;
 }
-/* Question label: fixed min-height so controls align across columns */
+
+/* --- Question labels: bright, fixed baseline height --- */
 div[data-testid="stForm"] .stRadio > label {
-    font-size: 0.9em;
-    min-height: 2.6em;
+    font-size: 0.88em;
+    font-weight: 500;
+    min-height: 2.5em;
     display: flex;
     align-items: flex-end;
-    margin-bottom: 0.1rem;
-    line-height: 1.25;
+    margin-bottom: 0.15rem;
+    line-height: 1.3;
 }
-/* Radio button row: tight, left-aligned */
-div[data-testid="stForm"] .stRadio > div[role="radiogroup"] {
-    gap: 0.35rem;
-    justify-content: flex-start;
+/* Help icon: muted, snug after label text */
+div[data-testid="stForm"] .stRadio > label .stTooltipIcon {
+    opacity: 0.35;
+    margin-left: 0.25em;
+    flex-shrink: 0;
 }
-/* Reduce vertical gap between label and radio group */
+
+/* --- Radio options: dimmer than labels, tight row --- */
 div[data-testid="stForm"] .stRadio > div {
     gap: 0.15rem;
 }
-/* Form card internal padding */
+div[data-testid="stForm"] .stRadio > div[role="radiogroup"] {
+    gap: 0.3rem;
+    justify-content: flex-start;
+    flex-wrap: nowrap;
+}
+div[data-testid="stForm"] .stRadio > div[role="radiogroup"] label {
+    font-size: 0.84em;
+    opacity: 0.6;
+    min-height: auto;
+    white-space: nowrap;
+    padding: 0.2em 0.1em;
+    transition: opacity 0.1s;
+}
+/* Selected state: brighter + accent underline */
+div[data-testid="stForm"] .stRadio > div[role="radiogroup"] label[data-checked="true"],
+div[data-testid="stForm"] .stRadio > div[role="radiogroup"] label:has(input:checked) {
+    opacity: 1;
+    font-weight: 600;
+    border-bottom: 2px solid rgba(99,130,202,0.7);
+    padding-bottom: calc(0.2em - 2px);
+}
+
+/* --- Form chrome --- */
 div[data-testid="stForm"] > div:first-child {
     padding-top: 0.5rem;
     padding-bottom: 0.2rem;
 }
-/* Compact note field */
 div[data-testid="stForm"] .stTextInput {
-    margin-top: -0.2rem;
+    margin-top: -0.15rem;
 }
-/* Submit button snug */
+/* Ignore-rule hint: noticeably dimmer */
+div[data-testid="stForm"] .stCaption {
+    opacity: 0.4;
+}
+/* Submit button: strongest element */
 div[data-testid="stForm"] .stFormSubmitButton {
-    margin-top: 0.15rem;
+    margin-top: 0.2rem;
+}
+div[data-testid="stForm"] .stFormSubmitButton button {
+    font-weight: 600;
 }
 </style>""", unsafe_allow_html=True)
 
@@ -237,7 +269,7 @@ def _save_annotation(username: str, judge_id: str, record: dict):
 # ============================================================
 
 def _compute_verdicts(q1, q2, q3, q4, q5):
-    # "Can't tell" on Q1/Q2 is treated as not-Yes (conservative)
+    # "Unsure" on Q1/Q2 is treated as not-Yes (conservative)
     clean = (
         q1 == "Yes" and q2 == "Yes"
         and q3 == "No" and q4 == "No" and q5 == "No"
@@ -464,16 +496,16 @@ with st.form("annotate", clear_on_submit=False):
     with r1c1:
         q1 = st.radio(
             f'Did "{source_surf}" disappear?',
-            ["Yes", "No", "Can't tell"],
-            index=_ri("source_disappeared", ["Yes", "No", "Can't tell"]),
+            ["Yes", "No", "Unsure"],
+            index=_ri("source_disappeared", ["Yes", "No", "Unsure"]),
             horizontal=True,
             help="Look for this word or phrase in the Baseline. Is it missing from the Adversarial text?",
         )
     with r1c2:
         q2 = st.radio(
             f'Did "{target_surf}" appear in the right place?',
-            ["Yes", "No", "Can't tell"],
-            index=_ri("target_appeared", ["Yes", "No", "Can't tell"]),
+            ["Yes", "No", "Unsure"],
+            index=_ri("target_appeared", ["Yes", "No", "Unsure"]),
             horizontal=True,
             help="Does this word or phrase show up in the Adversarial text where the source used to be?",
         )
