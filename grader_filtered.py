@@ -31,14 +31,14 @@ st.set_page_config(
     page_icon=None,
 )
 
-# Styling — desktop 2-col grid, mobile stacked, visual hierarchy
+# Styling — 2-col question grid, visual hierarchy, selected-state clarity
 st.markdown("""<style>
-/* ── Desktop: 2-column question grid ── */
+/* Column gap inside form rows */
 div[data-testid="stForm"] [data-testid="stHorizontalBlock"] {
     gap: 1rem;
 }
 
-/* Question labels */
+/* Question labels: bright, baseline-aligned */
 div[data-testid="stForm"] .stRadio > label {
     font-size: 0.9em;
     font-weight: 500;
@@ -48,13 +48,14 @@ div[data-testid="stForm"] .stRadio > label {
     margin-bottom: 0.15rem;
     line-height: 1.3;
 }
+/* Help icon: muted, snug */
 div[data-testid="stForm"] .stRadio > label .stTooltipIcon {
     opacity: 0.35;
     margin-left: 0.3em;
     flex-shrink: 0;
 }
 
-/* Radio options */
+/* Radio options: dimmer, tight, left-aligned */
 div[data-testid="stForm"] .stRadio > div { gap: 0.15rem; }
 div[data-testid="stForm"] .stRadio > div[role="radiogroup"] {
     gap: 0.35rem;
@@ -70,7 +71,7 @@ div[data-testid="stForm"] .stRadio > div[role="radiogroup"] label {
     transition: opacity 0.12s, border-color 0.12s;
     border-bottom: 2px solid transparent;
 }
-/* Selected state */
+/* Selected state: full opacity + accent underline */
 div[data-testid="stForm"] .stRadio > div[role="radiogroup"] label[data-checked="true"],
 div[data-testid="stForm"] .stRadio > div[role="radiogroup"] label:has(input:checked) {
     opacity: 1;
@@ -87,52 +88,6 @@ div[data-testid="stForm"] .stTextInput { margin-top: -0.1rem; }
 div[data-testid="stForm"] .stCaption { opacity: 0.38; }
 div[data-testid="stForm"] .stFormSubmitButton { margin-top: 0.2rem; }
 div[data-testid="stForm"] .stFormSubmitButton button { font-weight: 600; }
-
-/* ── Mobile: stack everything, bigger targets ── */
-@media (max-width: 640px) {
-    /* Hide sidebar on narrow screens */
-    section[data-testid="stSidebar"] { display: none; }
-
-    /* Stack form columns vertically */
-    div[data-testid="stForm"] [data-testid="stHorizontalBlock"] {
-        flex-direction: column !important;
-        gap: 0.2rem;
-    }
-    /* Bigger tap targets */
-    div[data-testid="stForm"] .stRadio > div[role="radiogroup"] label {
-        font-size: 0.95em;
-        padding: 0.4em 0.3em;
-    }
-    /* Question labels don't need min-height when stacked */
-    div[data-testid="stForm"] .stRadio > label {
-        min-height: auto;
-        font-size: 0.95em;
-    }
-    /* Navigation columns stack into compact row */
-    [data-testid="stHorizontalBlock"] { gap: 0.3rem !important; }
-}
-
-/* ── Sticky bottom nav on mobile ── */
-@media (max-width: 640px) {
-    #bottom-nav {
-        position: fixed;
-        bottom: 0;
-        left: 0;
-        right: 0;
-        background: var(--background-color, #0e1117);
-        border-top: 1px solid rgba(128,128,128,0.2);
-        padding: 0.5rem 1rem;
-        z-index: 999;
-        display: flex;
-        gap: 0.5rem;
-        align-items: center;
-    }
-    /* Add bottom padding to main content so it doesn't hide behind footer */
-    .main .block-container { padding-bottom: 4rem !important; }
-}
-@media (min-width: 641px) {
-    #bottom-nav { display: none; }
-}
 </style>""", unsafe_allow_html=True)
 
 # Columns fetched from packet_metadata for annotation display
@@ -450,26 +405,6 @@ idx = st.session_state.current_idx
 row = presentable[idx]
 
 # ============================================================
-# NAVIGATION (top bar — desktop primary, mobile compact)
-# ============================================================
-
-nav1, nav2, nav3 = st.columns([1, 3, 1])
-with nav1:
-    if st.button("← Prev", disabled=(idx == 0), use_container_width=True, key="prev_top"):
-        st.session_state.current_idx -= 1
-        st.rerun()
-with nav2:
-    st.markdown(
-        f"<div style='text-align:center;padding:6px 0;font-size:0.82em;opacity:0.5'>"
-        f"{idx + 1} of {total}</div>",
-        unsafe_allow_html=True,
-    )
-with nav3:
-    if st.button("Next →", disabled=(idx == total - 1), use_container_width=True, key="next_top"):
-        st.session_state.current_idx += 1
-        st.rerun()
-
-# ============================================================
 # ROW DISPLAY
 # ============================================================
 
@@ -620,14 +555,21 @@ if submitted:
         st.rerun()
 
 # ============================================================
-# MOBILE STICKY FOOTER (Prev / counter / Next)
+# NAVIGATION (below form — content-first on mobile)
 # ============================================================
 
-st.markdown(
-    f"""<div id="bottom-nav">
-    <span style="font-size:0.82em;opacity:0.5;flex:1;text-align:center">
-        {idx + 1} / {total}
-    </span>
-    </div>""",
-    unsafe_allow_html=True,
-)
+nav1, nav2, nav3 = st.columns([1, 3, 1])
+with nav1:
+    if st.button("← Prev", disabled=(idx == 0), use_container_width=True):
+        st.session_state.current_idx -= 1
+        st.rerun()
+with nav2:
+    st.markdown(
+        f"<div style='text-align:center;padding:6px 0;font-size:0.82em;opacity:0.5'>"
+        f"{idx + 1} of {total}</div>",
+        unsafe_allow_html=True,
+    )
+with nav3:
+    if st.button("Next →", disabled=(idx == total - 1), use_container_width=True):
+        st.session_state.current_idx += 1
+        st.rerun()
