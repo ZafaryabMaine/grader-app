@@ -31,107 +31,74 @@ st.set_page_config(
     page_icon=None,
 )
 
-# Styling — desktop 2-col grid, mobile stacked, visual hierarchy
+# Form styling — grid alignment, visual hierarchy, selected-state clarity
 st.markdown("""<style>
-/* ── Desktop: 2-column question grid ── */
+/* --- Grid rhythm --- */
 div[data-testid="stForm"] [data-testid="stHorizontalBlock"] {
-    gap: 1rem;
+    gap: 0.6rem;
 }
 
-/* Question labels */
+/* --- Question labels: bright, fixed baseline height --- */
 div[data-testid="stForm"] .stRadio > label {
-    font-size: 0.9em;
+    font-size: 0.88em;
     font-weight: 500;
-    min-height: 2.2em;
+    min-height: 2.5em;
     display: flex;
     align-items: flex-end;
     margin-bottom: 0.15rem;
     line-height: 1.3;
 }
+/* Help icon: muted, snug after label text */
 div[data-testid="stForm"] .stRadio > label .stTooltipIcon {
     opacity: 0.35;
-    margin-left: 0.3em;
+    margin-left: 0.25em;
     flex-shrink: 0;
 }
 
-/* Radio options */
-div[data-testid="stForm"] .stRadio > div { gap: 0.15rem; }
+/* --- Radio options: dimmer than labels, tight row --- */
+div[data-testid="stForm"] .stRadio > div {
+    gap: 0.15rem;
+}
 div[data-testid="stForm"] .stRadio > div[role="radiogroup"] {
-    gap: 0.35rem;
+    gap: 0.3rem;
     justify-content: flex-start;
     flex-wrap: nowrap;
 }
 div[data-testid="stForm"] .stRadio > div[role="radiogroup"] label {
-    font-size: 0.85em;
-    opacity: 0.55;
+    font-size: 0.84em;
+    opacity: 0.6;
     min-height: auto;
     white-space: nowrap;
-    padding: 0.25em 0.15em;
-    transition: opacity 0.12s, border-color 0.12s;
-    border-bottom: 2px solid transparent;
+    padding: 0.2em 0.1em;
+    transition: opacity 0.1s;
 }
-/* Selected state */
+/* Selected state: brighter + accent underline */
 div[data-testid="stForm"] .stRadio > div[role="radiogroup"] label[data-checked="true"],
 div[data-testid="stForm"] .stRadio > div[role="radiogroup"] label:has(input:checked) {
     opacity: 1;
     font-weight: 600;
-    border-bottom-color: rgba(99,130,202,0.7);
+    border-bottom: 2px solid rgba(99,130,202,0.7);
+    padding-bottom: calc(0.2em - 2px);
 }
 
-/* Form chrome */
+/* --- Form chrome --- */
 div[data-testid="stForm"] > div:first-child {
     padding-top: 0.5rem;
     padding-bottom: 0.2rem;
 }
-div[data-testid="stForm"] .stTextInput { margin-top: -0.1rem; }
-div[data-testid="stForm"] .stCaption { opacity: 0.38; }
-div[data-testid="stForm"] .stFormSubmitButton { margin-top: 0.2rem; }
-div[data-testid="stForm"] .stFormSubmitButton button { font-weight: 600; }
-
-/* ── Mobile: stack everything, bigger targets ── */
-@media (max-width: 640px) {
-    /* Hide sidebar on narrow screens */
-    section[data-testid="stSidebar"] { display: none; }
-
-    /* Stack form columns vertically */
-    div[data-testid="stForm"] [data-testid="stHorizontalBlock"] {
-        flex-direction: column !important;
-        gap: 0.2rem;
-    }
-    /* Bigger tap targets */
-    div[data-testid="stForm"] .stRadio > div[role="radiogroup"] label {
-        font-size: 0.95em;
-        padding: 0.4em 0.3em;
-    }
-    /* Question labels don't need min-height when stacked */
-    div[data-testid="stForm"] .stRadio > label {
-        min-height: auto;
-        font-size: 0.95em;
-    }
-    /* Navigation columns stack into compact row */
-    [data-testid="stHorizontalBlock"] { gap: 0.3rem !important; }
+div[data-testid="stForm"] .stTextInput {
+    margin-top: -0.15rem;
 }
-
-/* ── Sticky bottom nav on mobile ── */
-@media (max-width: 640px) {
-    #bottom-nav {
-        position: fixed;
-        bottom: 0;
-        left: 0;
-        right: 0;
-        background: var(--background-color, #0e1117);
-        border-top: 1px solid rgba(128,128,128,0.2);
-        padding: 0.5rem 1rem;
-        z-index: 999;
-        display: flex;
-        gap: 0.5rem;
-        align-items: center;
-    }
-    /* Add bottom padding to main content so it doesn't hide behind footer */
-    .main .block-container { padding-bottom: 4rem !important; }
+/* Ignore-rule hint: noticeably dimmer */
+div[data-testid="stForm"] .stCaption {
+    opacity: 0.4;
 }
-@media (min-width: 641px) {
-    #bottom-nav { display: none; }
+/* Submit button: strongest element */
+div[data-testid="stForm"] .stFormSubmitButton {
+    margin-top: 0.2rem;
+}
+div[data-testid="stForm"] .stFormSubmitButton button {
+    font-weight: 600;
 }
 </style>""", unsafe_allow_html=True)
 
@@ -450,12 +417,12 @@ idx = st.session_state.current_idx
 row = presentable[idx]
 
 # ============================================================
-# NAVIGATION (top bar — desktop primary, mobile compact)
+# NAVIGATION
 # ============================================================
 
 nav1, nav2, nav3 = st.columns([1, 3, 1])
 with nav1:
-    if st.button("← Prev", disabled=(idx == 0), use_container_width=True, key="prev_top"):
+    if st.button("← Prev", disabled=(idx == 0), use_container_width=True):
         st.session_state.current_idx -= 1
         st.rerun()
 with nav2:
@@ -465,7 +432,7 @@ with nav2:
         unsafe_allow_html=True,
     )
 with nav3:
-    if st.button("Next →", disabled=(idx == total - 1), use_container_width=True, key="next_top"):
+    if st.button("Next →", disabled=(idx == total - 1), use_container_width=True):
         st.session_state.current_idx += 1
         st.rerun()
 
@@ -524,9 +491,9 @@ def _ri(field, options):
 
 
 with st.form("annotate", clear_on_submit=False):
-    # Row 1: Q1, Q2
-    r1a, r1b = st.columns(2)
-    with r1a:
+    # Row 1: Q1, Q2, Q3 — three equal columns
+    r1c1, r1c2, r1c3 = st.columns(3)
+    with r1c1:
         q1 = st.radio(
             f'Did "{source_surf}" disappear?',
             ["Yes", "No", "Unsure"],
@@ -534,7 +501,7 @@ with st.form("annotate", clear_on_submit=False):
             horizontal=True,
             help="Look for this word or phrase in the Baseline. Is it missing from the Adversarial text?",
         )
-    with r1b:
+    with r1c2:
         q2 = st.radio(
             f'Did "{target_surf}" appear in the right place?',
             ["Yes", "No", "Unsure"],
@@ -542,18 +509,18 @@ with st.form("annotate", clear_on_submit=False):
             horizontal=True,
             help="Does this word or phrase show up in the Adversarial text where the source used to be?",
         )
-
-    # Row 2: Q3, Q4
-    r2a, r2b = st.columns(2)
-    with r2a:
+    with r1c3:
         q3 = st.radio(
-            "Did anything else in meaning change?",
+            "Anything else in meaning change?",
             ["Yes", "No"],
             index=_ri("extra_meaning_changed", ["Yes", "No"]),
             horizontal=True,
             help="Aside from the intended edit, did the rest of the sentence change in meaning?",
         )
-    with r2b:
+
+    # Row 2: Q4, Q5, (empty) — same three-column grid
+    r2c1, r2c2, r2c3 = st.columns(3)
+    with r2c1:
         q4 = st.radio(
             "Does the output look broken?",
             ["Yes", "No"],
@@ -561,19 +528,16 @@ with st.form("annotate", clear_on_submit=False):
             horizontal=True,
             help="Repeated words, gibberish, cut-off text, garbled characters, or obvious nonsense.",
         )
-
-    # Row 3: Q5 alone — same 2-col grid, second column empty
-    r3a, r3b = st.columns(2)
-    with r3a:
+    with r2c2:
         q5 = st.radio(
-            "Sounds normal but says the wrong thing?",
+            "Sounds normal but wrong?",
             ["Yes", "No"],
             index=_ri("plausible_but_wrong", ["Yes", "No"]),
             horizontal=True,
             help="The sentence reads fine but says something different or incorrect beyond the intended edit.",
         )
-    with r3b:
-        pass  # Empty — preserves grid alignment
+    with r2c3:
+        pass  # Empty — maintains grid alignment
 
     st.caption('*Ignore punctuation, capitalization, spacing, and "ten" vs "10".*')
 
@@ -618,16 +582,3 @@ if submitted:
             next_idx = min(idx + 1, total - 1)
         st.session_state.current_idx = next_idx
         st.rerun()
-
-# ============================================================
-# MOBILE STICKY FOOTER (Prev / counter / Next)
-# ============================================================
-
-st.markdown(
-    f"""<div id="bottom-nav">
-    <span style="font-size:0.82em;opacity:0.5;flex:1;text-align:center">
-        {idx + 1} / {total}
-    </span>
-    </div>""",
-    unsafe_allow_html=True,
-)
