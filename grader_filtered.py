@@ -217,28 +217,25 @@ def _compute_verdicts(q1, q2, q3, q4, q5):
 # ============================================================
 
 def _render_diff(baseline: str, adversarial: str) -> str:
+    """Highlight changes in the adversarial text only.
+
+    Shows the actual adversarial output with inserted/replaced spans
+    highlighted. Deleted text from the baseline is NOT injected — the
+    annotator sees the real adversarial sentence, not a mixed artifact.
+    """
+    _hl = (
+        "background:rgba(255,193,7,0.28);font-weight:600;"
+        "border-radius:2px;padding:0 2px"
+    )
     parts = []
     for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(
         None, baseline, adversarial
     ).get_opcodes():
         if tag == "equal":
             parts.append(adversarial[j1:j2])
-        elif tag == "insert":
-            parts.append(
-                f"<span style='background:rgba(76,175,80,0.25);font-weight:600;"
-                f"border-radius:2px;padding:0 1px'>{adversarial[j1:j2]}</span>"
-            )
-        elif tag == "replace":
-            parts.append(
-                f"<span style='background:rgba(255,193,7,0.3);font-weight:600;"
-                f"border-radius:2px;padding:0 1px'>{adversarial[j1:j2]}</span>"
-            )
-        elif tag == "delete":
-            parts.append(
-                f"<span style='background:rgba(244,67,54,0.2);"
-                f"text-decoration:line-through;border-radius:2px;"
-                f"padding:0 1px'>{baseline[i1:i2]}</span>"
-            )
+        elif tag in ("insert", "replace"):
+            parts.append(f"<span style='{_hl}'>{adversarial[j1:j2]}</span>")
+        # "delete" — baseline text removed; do not inject into adversarial
     return "".join(parts)
 
 
@@ -378,13 +375,13 @@ source_surf = row["intended_source_surface"]
 target_surf = row["intended_target_surface"]
 kind_label = TARGET_KIND_DISPLAY.get(target_kind, target_kind)
 
-# Intended edit prominent, judge_id secondary
+# Task context: intended edit prominent, judge_id secondary
 st.markdown(
-    f"<div style='margin-top:2px'>"
-    f"<span style='font-size:1.05em;font-weight:600'>"
-    f"{kind_label}: &ldquo;{source_surf}&rdquo; &rarr; &ldquo;{target_surf}&rdquo;"
-    f"</span>"
-    f"<span style='float:right;font-size:0.78em;opacity:0.4'>{judge_id}</span>"
+    f"<div style='margin:4px 0 6px 0'>"
+    f"<span style='font-size:0.7em;opacity:0.35;float:right'>{judge_id}</span>"
+    f"<span style='font-size:0.95em'>Expected {kind_label.lower()} edit: "
+    f"replace <strong>&ldquo;{source_surf}&rdquo;</strong> "
+    f"with <strong>&ldquo;{target_surf}&rdquo;</strong></span>"
     f"</div>",
     unsafe_allow_html=True,
 )
@@ -393,21 +390,19 @@ baseline = row["quant_pred"]
 adversarial = row["adversarial_pred"]
 diff_html = _render_diff(baseline, adversarial)
 
+_lbl = (
+    "font-size:0.7em;opacity:0.4;margin-bottom:2px;"
+    "text-transform:uppercase;letter-spacing:0.04em"
+)
 _box = (
-    "padding:10px 14px;border-radius:5px;font-size:1.02em;line-height:1.55;"
-    "border:1px solid rgba(128,128,128,0.25);margin:3px 0"
+    "padding:10px 14px;border-radius:6px;font-size:1em;line-height:1.6;"
+    "border:1px solid rgba(128,128,128,0.2)"
 )
 
 st.markdown(
-    f"<div style='font-size:0.72em;opacity:0.45;margin-top:10px;margin-bottom:1px;"
-    f"text-transform:uppercase;letter-spacing:0.05em'>Baseline</div>"
-    f"<div style='{_box}'>{baseline}</div>",
-    unsafe_allow_html=True,
-)
-
-st.markdown(
-    f"<div style='font-size:0.72em;opacity:0.45;margin-top:8px;margin-bottom:1px;"
-    f"text-transform:uppercase;letter-spacing:0.05em'>Adversarial</div>"
+    f"<div style='{_lbl};margin-top:8px'>Baseline (before attack)</div>"
+    f"<div style='{_box}'>{baseline}</div>"
+    f"<div style='{_lbl};margin-top:10px'>Adversarial (after attack)</div>"
     f"<div style='{_box}'>{diff_html}</div>",
     unsafe_allow_html=True,
 )
@@ -423,6 +418,8 @@ def _ri(field, options):
     val = existing.get(field)
     return options.index(val) if val in options else None
 
+
+st.markdown("<div style='margin-top:12px'></div>", unsafe_allow_html=True)
 
 with st.form("annotate", clear_on_submit=False):
     c1, c2 = st.columns(2)
