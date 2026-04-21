@@ -31,6 +31,22 @@ st.set_page_config(
     page_icon=None,
 )
 
+# Compact form styling — tighten Streamlit's default radio/label padding
+st.markdown("""<style>
+/* Tighten radio button group spacing */
+div[data-testid="stForm"] .stRadio > div {gap: 0.3rem;}
+div[data-testid="stForm"] .stRadio > label {margin-bottom: 0.15rem; font-size: 0.92em;}
+div[data-testid="stForm"] .stRadio > div[role="radiogroup"] {gap: 0.4rem;}
+/* Tighten column gaps inside the form */
+div[data-testid="stForm"] [data-testid="stHorizontalBlock"] {gap: 0.5rem;}
+/* Reduce form internal padding */
+div[data-testid="stForm"] > div:first-child {padding-top: 0.6rem; padding-bottom: 0.3rem;}
+/* Compact text input */
+div[data-testid="stForm"] .stTextInput {margin-top: -0.3rem;}
+/* Slightly smaller submit button top margin */
+div[data-testid="stForm"] .stFormSubmitButton {margin-top: 0.2rem;}
+</style>""", unsafe_allow_html=True)
+
 # Columns fetched from packet_metadata for annotation display
 BLIND_COLUMNS = [
     "judge_id",
@@ -349,15 +365,15 @@ row = presentable[idx]
 # NAVIGATION
 # ============================================================
 
-nav1, nav2, nav3 = st.columns([1, 2, 1])
+nav1, nav2, nav3 = st.columns([1, 3, 1])
 with nav1:
     if st.button("← Prev", disabled=(idx == 0), use_container_width=True):
         st.session_state.current_idx -= 1
         st.rerun()
 with nav2:
     st.markdown(
-        f"<div style='text-align:center;padding:4px 0;font-size:0.85em;opacity:0.6'>"
-        f"<strong>{idx + 1}</strong> / {total}</div>",
+        f"<div style='text-align:center;padding:6px 0;font-size:0.82em;opacity:0.5'>"
+        f"{idx + 1} of {total}</div>",
         unsafe_allow_html=True,
     )
 with nav3:
@@ -400,9 +416,9 @@ _box = (
 )
 
 st.markdown(
-    f"<div style='{_lbl};margin-top:8px'>Baseline (before attack)</div>"
+    f"<div style='{_lbl};margin-top:6px'>Baseline (before attack)</div>"
     f"<div style='{_box}'>{baseline}</div>"
-    f"<div style='{_lbl};margin-top:10px'>Adversarial (after attack)</div>"
+    f"<div style='{_lbl};margin-top:8px'>Adversarial (after attack)</div>"
     f"<div style='{_box}'>{diff_html}</div>",
     unsafe_allow_html=True,
 )
@@ -418,8 +434,6 @@ def _ri(field, options):
     val = existing.get(field)
     return options.index(val) if val in options else None
 
-
-st.markdown("<div style='margin-top:12px'></div>", unsafe_allow_html=True)
 
 with st.form("annotate", clear_on_submit=False):
     c1, c2 = st.columns(2)
@@ -466,12 +480,13 @@ with st.form("annotate", clear_on_submit=False):
             help="The sentence reads fine but says something different or incorrect beyond the intended edit.",
         )
 
+    st.caption('*Ignore punctuation, capitalization, spacing, and "ten" vs "10".*')
+
     note = st.text_input(
         "Note (optional)",
         value=existing.get("annotator_note", ""),
     )
 
-    st.caption('*Ignore: punctuation, capitalization, spacing, "ten" vs "10".*')
     submitted = st.form_submit_button("Save & Next", use_container_width=True)
 
 if submitted:
